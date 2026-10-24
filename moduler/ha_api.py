@@ -9,7 +9,7 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 try:
     load_dotenv(BASE_DIR / ".env")
 except Exception as e:
-    logger.error(f"Kunne ikke indlæse .env-filen: {e}")
+    logging.error(f"Kunne ikke indlæse .env-filen: {e}")
     raise
 
 # Konfigurér logging
