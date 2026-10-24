@@ -6,7 +6,11 @@ import logging
 
 # Tving indlæsning af .env fra projektroden
 BASE_DIR = Path(__file__).resolve().parents[1]
-load_dotenv(BASE_DIR / ".env")
+try:
+    load_dotenv(BASE_DIR / ".env")
+except Exception as e:
+    logger.error(f"Kunne ikke indlæse .env-filen: {e}")
+    raise
 
 # Konfigurér logging
 logging.basicConfig(level=logging.INFO)

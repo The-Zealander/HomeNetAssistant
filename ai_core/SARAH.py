@@ -46,8 +46,12 @@ class SarahV0_2:
         self.notes_path = data_dir / "sarah_noter.json"
         data_dir.mkdir(parents=True, exist_ok=True)
 
-        self.erfaringer = self._load_json(self.memory_path)
-        self.noter = self._load_json(self.notes_path)
+        try:
+            self.erfaringer = self._load_json(self.memory_path)
+            self.noter = self._load_json(self.notes_path)
+        except Exception as e:
+            logger.error(f"Kunne ikke indlæse erfaringer eller noter: {e}")
+            raise
 
         if not all(isinstance(erfaring, str) for erfaring in self.erfaringer):
             logger.error(f"Erfaringsfilen skal kun indeholde tekster: {self.memory_path}")
@@ -67,12 +71,16 @@ class SarahV0_2:
         self.program_manager = ProgramManager(server_mode=server_mode)
 
         # Smart Home Integration
-        self.ha = HomeAssistantAPI()
-        self.ha_online = self.ha.is_connected()
-        if self.ha_online:
-            logger.info("[SYSTEM: SARAH har etableret forbindelse til Home Assistant]")
-        else:
-            logger.warning("[SYSTEM: Advarsel - Kunne ikke forbinde til Home Assistant. Tjek .env]")
+        try:
+            self.ha = HomeAssistantAPI()
+            self.ha_online = self.ha.is_connected()
+            if self.ha_online:
+                logger.info("[SYSTEM: SARAH har etableret forbindelse til Home Assistant]")
+            else:
+                logger.warning("[SYSTEM: Advarsel - Kunne ikke forbinde til Home Assistant. Tjek .env]")
+        except Exception as e:
+            logger.error(f"Kunne ikke oprette forbindelse til Home Assistant: {e}")
+            self.ha_online = False
 
         self.system_prompt = (
             "Du er SARAH (Simpel Autonom Realtids Assistent for Hjemmet). "
