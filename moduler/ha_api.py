@@ -1,64 +1,76 @@
 import os
-import time
-from urllib.parse import urlparse
+import requests
+from dotenv import load_dotenv
+from pathlib import Path
 
-import httpx
+# Tving indlæsning af .env fra projektroden
+BASE_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(BASE_DIR / ".env")
 
+class HomeAssistantAPI:
+    def __init__(self):
+        self.base_url = os.getenv("HA_URL", "http://homeassistant.local:8123").rstrip('/')
+        self.token = os.getenv("HA_TOKEN")
+        self.headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json",
+        }
 
-class HomeAssistantClient:
-    """Læser forbindelsesstatus fra en eksisterende Home Assistant-instans."""
-
-    def __init__(self, base_url=None, token=None):
-        self.base_url = (base_url or os.environ.get("HA_URL", "")).rstrip("/")
-        self.token = token or os.environ.get("HA_TOKEN", "")
-        self.status = "not_configured"
-        self.error = None
-        self._client = None
-        self._last_checked = 0.0
-
-        if not self.base_url and not self.token:
-            return
-        if not self.base_url or not self.token:
-            raise ValueError("Home Assistant kræver både HA_URL og HA_TOKEN.")
-
-        parsed = urlparse(self.base_url)
-        if (
-            parsed.scheme not in {"http", "https"}
-            or not parsed.netloc
-            or parsed.username
-            or parsed.password
-            or parsed.query
-            or parsed.fragment
-        ):
-            raise ValueError("HA_URL skal være en gyldig http://- eller https://-adresse.")
-        self._client = httpx.Client(
-            base_url=self.base_url,
-            headers={"Authorization": f"Bearer {self.token}"},
-            timeout=3.0,
-        )
-
-    def check_connection(self):
-        if self._client is None:
-            self.status = "not_configured"
-            return self.status
-        if time.monotonic() - self._last_checked < 30:
-            return self.status
-
-        self._last_checked = time.monotonic()
+    def is_connected(self) -> bool:
+        """Tjekker om HA svarer og tokenet er gyldigt."""
         try:
-            response = self._client.get("/api/")
-            response.raise_for_status()
-        except httpx.HTTPStatusError as fejl:
-            self.status = "error"
-            self.error = f"Home Assistant svarede med HTTP {fejl.response.status_code}."
-        except httpx.HTTPError:
-            self.status = "unavailable"
-            self.error = "Home Assistant kunne ikke kontaktes."
-        else:
-            self.status = "connected"
-            self.error = None
-        return self.status
+            res = requests.get(f"{self.base_url}/api/", headers=self.headers, timeout=3)
+            return res.status_code == 200
+        except Exception:
+            return False
 
-    def close(self):
-        if self._client is not None:
-            self._client.close()
+    def get_state(self, entity_id: str):
+        """Henter tilstanden for en specifik enhed (f.eks. 'light.stue')."""
+        try:
+            res = requests.get(f"{self.base_url}/api/states/{entity_id}", headers=self.headers, timeout=3)
+            if res.status_code == 200:
+                return res.json()
+        except Exception as e:
+            print(f"[HA API Fejl] Kunne ikke hente {entity_id}: {e}")
+        return None
+
+    def call_service(self, domain: str, service: str, entity_id: str = None, extra_data: dict = None):
+        """Udfører en handling i HA (f.eks. domain='light', service='turn_on')."""
+        url = f"{self.base_url}/api/services/{domain}/{service}"
+        payload = extra_data or {}
+        if entity_id:
+            payload["entity_id"] = entity_id
+
+        try:
+            res = requests.post(url, headers=self.headers, json=payload, timeout=3)
+            return res.status_code == 200
+        except Exception as e:
+            print(f"[HA API Fejl] Kunne ikke kalde {domain}.{service}: {e}")
+            return False
+
+    def turn_on(self, entity_id: str):
+        domain = entity_id.split('.')[0]
+        return self.call_service(domain, "turn_on", entity_id=entity_id)
+
+    def turn_off(self, entity_id: str):
+        domain = entity_id.split('.')[0]
+        return self.call_service(domain, "turn_off", entity_id=entity_id)
+
+    def get_all_entities(self, domain_filter=("light", "switch", "climate", "sensor")):
+        """Henter en liste over tilgængelige enheder i Home Assistant."""
+        try:
+            res = requests.get(f"{self.base_url}/api/states", headers=self.headers, timeout=3)
+            if res.status_code == 200:
+                states = res.json()
+                entities = []
+                for item in states:
+                    entity_id = item.get('entity_id', '')
+                    domain = entity_id.split('.')[0]
+                    if domain in domain_filter:
+                        friendly_name = item.get('attributes', {}).get('friendly_name', entity_id)
+                        state = item.get('state', 'unknown')
+                        entities.append(f"{entity_id} ({friendly_name}) - status: {state}")
+                return entities
+        except Exception as e:
+            print(f"[HA API Fejl] Kunne ikke hente entiteter: {e}")
+        return []
