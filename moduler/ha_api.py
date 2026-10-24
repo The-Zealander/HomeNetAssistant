@@ -29,7 +29,12 @@ class HomeAssistantAPI:
         """Tjekker om HA svarer og tokenet er gyldigt."""
         try:
             res = requests.get(f"{self.base_url}/api/", headers=self.headers, timeout=3)
-            return res.status_code == 200
+            if res.status_code == 200:
+                logger.info("Forbindelse til Home Assistant givet.")
+                return True
+            else:
+                logger.error(f"Ugyldig forbindelse til Home Assistant. Statuskode: {res.status_code}")
+                return False
         except requests.RequestException as e:
             logger.error(f"Kunne ikke forbinde til Home Assistant: {e}")
             return False
@@ -39,9 +44,12 @@ class HomeAssistantAPI:
         try:
             res = requests.get(f"{self.base_url}/api/states/{entity_id}", headers=self.headers, timeout=3)
             if res.status_code == 200:
+                logger.info(f"Hentet tilstand for {entity_id}: {res.json()}")
                 return res.json()
+            else:
+                logger.error(f"Kunne ikke hente tilstand for {entity_id}. Statuskode: {res.status_code}")
         except requests.RequestException as e:
-            logger.error(f"Kunne ikke hente {entity_id}: {e}")
+            logger.error(f"Kunne ikke hente tilstand for {entity_id}: {e}")
         return None
 
     def call_service(self, domain: str, service: str, entity_id: str = None, extra_data: dict = None):
@@ -53,10 +61,14 @@ class HomeAssistantAPI:
 
         try:
             res = requests.post(url, headers=self.headers, json=payload, timeout=3)
-            return res.status_code == 200
+            if res.status_code == 200:
+                logger.info(f"Udført {domain}.{service} på {entity_id}")
+                return True
+            else:
+                logger.error(f"Kunne ikke udføre {domain}.{service} på {entity_id}. Statuskode: {res.status_code}")
         except requests.RequestException as e:
-            logger.error(f"Kunne ikke kalde {domain}.{service}: {e}")
-            return False
+            logger.error(f"Kunne ikke udføre {domain}.{service} på {entity_id}: {e}")
+        return False
 
     def turn_on(self, entity_id: str):
         domain = entity_id.split('.')[0]
@@ -80,7 +92,10 @@ class HomeAssistantAPI:
                         friendly_name = item.get('attributes', {}).get('friendly_name', entity_id)
                         state = item.get('state', 'unknown')
                         entities.append(f"{entity_id} ({friendly_name}) - status: {state}")
+                logger.info(f"Hentet alle entiteter: {entities}")
                 return entities
+            else:
+                logger.error(f"Kunne ikke hente alle entiteter. Statuskode: {res.status_code}")
         except requests.RequestException as e:
-            logger.error(f"Kunne ikke hente entiteter: {e}")
+            logger.error(f"Kunne ikke hente alle entiteter: {e}")
         return []
