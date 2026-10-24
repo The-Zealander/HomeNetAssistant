@@ -2,10 +2,15 @@ import os
 import requests
 from dotenv import load_dotenv
 from pathlib import Path
+import logging
 
 # Tving indlæsning af .env fra projektroden
 BASE_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(BASE_DIR / ".env")
+
+# Konfigurér logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class HomeAssistantAPI:
     def __init__(self):
@@ -16,12 +21,17 @@ class HomeAssistantAPI:
             "Content-Type": "application/json",
         }
 
+        if not self.base_url or not self.token:
+            logger.error("HA_URL eller HA_TOKEN er ikke defineret i .env-filen.")
+            raise ValueError("HA_URL eller HA_TOKEN er ikke defineret i .env-filen.")
+
     def is_connected(self) -> bool:
         """Tjekker om HA svarer og tokenet er gyldigt."""
         try:
             res = requests.get(f"{self.base_url}/api/", headers=self.headers, timeout=3)
             return res.status_code == 200
-        except Exception:
+        except requests.RequestException as e:
+            logger.error(f"Kunne ikke forbinde til Home Assistant: {e}")
             return False
 
     def get_state(self, entity_id: str):
@@ -30,8 +40,8 @@ class HomeAssistantAPI:
             res = requests.get(f"{self.base_url}/api/states/{entity_id}", headers=self.headers, timeout=3)
             if res.status_code == 200:
                 return res.json()
-        except Exception as e:
-            print(f"[HA API Fejl] Kunne ikke hente {entity_id}: {e}")
+        except requests.RequestException as e:
+            logger.error(f"Kunne ikke hente {entity_id}: {e}")
         return None
 
     def call_service(self, domain: str, service: str, entity_id: str = None, extra_data: dict = None):
@@ -44,8 +54,8 @@ class HomeAssistantAPI:
         try:
             res = requests.post(url, headers=self.headers, json=payload, timeout=3)
             return res.status_code == 200
-        except Exception as e:
-            print(f"[HA API Fejl] Kunne ikke kalde {domain}.{service}: {e}")
+        except requests.RequestException as e:
+            logger.error(f"Kunne ikke kalde {domain}.{service}: {e}")
             return False
 
     def turn_on(self, entity_id: str):
@@ -71,6 +81,6 @@ class HomeAssistantAPI:
                         state = item.get('state', 'unknown')
                         entities.append(f"{entity_id} ({friendly_name}) - status: {state}")
                 return entities
-        except Exception as e:
-            print(f"[HA API Fejl] Kunne ikke hente entiteter: {e}")
+        except requests.RequestException as e:
+            logger.error(f"Kunne ikke hente entiteter: {e}")
         return []

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import httpx
 import ollama
+import logging
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -15,6 +16,9 @@ from moduler.program_manager import ProgramManager
 from moduler.ha_api import HomeAssistantAPI
 from ai_core.voice_io import LokalStemme
 
+# Konfigurér logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class SarahV0_2:
     PROGRAM_ALIASES = {
@@ -46,6 +50,7 @@ class SarahV0_2:
         self.noter = self._load_json(self.notes_path)
 
         if not all(isinstance(erfaring, str) for erfaring in self.erfaringer):
+            logger.error(f"Erfaringsfilen skal kun indeholde tekster: {self.memory_path}")
             raise ValueError(f"Erfaringsfilen skal kun indeholde tekster: {self.memory_path}")
         if not all(
                 isinstance(note, dict)
@@ -55,6 +60,7 @@ class SarahV0_2:
                 )
                 for note in self.noter
         ):
+            logger.error(f"Note-filen indeholder ugyldige noter: {self.notes_path}")
             raise ValueError(f"Note-filen indeholder ugyldige noter: {self.notes_path}")
 
         self.samtale = []
@@ -64,9 +70,9 @@ class SarahV0_2:
         self.ha = HomeAssistantAPI()
         self.ha_online = self.ha.is_connected()
         if self.ha_online:
-            print("[SYSTEM: SARAH har etableret forbindelse til Home Assistant]")
+            logger.info("[SYSTEM: SARAH har etableret forbindelse til Home Assistant]")
         else:
-            print("[SYSTEM: Advarsel - Kunne ikke forbinde til Home Assistant. Tjek .env]")
+            logger.warning("[SYSTEM: Advarsel - Kunne ikke forbinde til Home Assistant. Tjek .env]")
 
         self.system_prompt = (
             "Du er SARAH (Simpel Autonom Realtids Assistent for Hjemmet). "
@@ -90,27 +96,37 @@ class SarahV0_2:
     def _load_json(path):
         if not path.exists():
             return []
-        with path.open(encoding="utf-8") as fil:
-            data = json.load(fil)
-        if not isinstance(data, list):
-            raise ValueError(f"Datafilen skal indeholde en liste: {path}")
-        return data
+        try:
+            with path.open(encoding="utf-8") as fil:
+                data = json.load(fil)
+            if not isinstance(data, list):
+                logger.error(f"Datafilen skal indeholde en liste: {path}")
+                raise ValueError(f"Datafilen skal indeholde en liste: {path}")
+            return data
+        except json.JSONDecodeError as e:
+            logger.error(f"Kunne ikke parse JSON-filen {path}: {e}")
+            raise
 
     def _save_json(self, data, path):
         temp_path = path.with_suffix(path.suffix + ".tmp")
-        with temp_path.open("w", encoding="utf-8") as fil:
-            json.dump(data, fil, ensure_ascii=False, indent=4)
-        temp_path.replace(path)
+        try:
+            with temp_path.open("w", encoding="utf-8") as fil:
+                json.dump(data, fil, ensure_ascii=False, indent=4)
+            temp_path.replace(path)
+        except Exception as e:
+            logger.error(f"Kunne ikke gemme filen {path}: {e}")
+            raise
 
     def tilfoej_note(self, titel, indhold):
         if not titel.strip() or not indhold.strip():
+            logger.error("Notens titel og indhold må ikke være tomme.")
             raise ValueError("Notens titel og indhold må ikke være tomme.")
         nu = datetime.now().strftime("%Y-%m-%d %H:%M")
         ny_note = {"titel": titel.strip(), "indhold": indhold.strip(), "tidspunkt": nu}
         noter = [*self.noter, ny_note]
         self._save_json(noter, self.notes_path)
         self.noter = noter
-        print(f"\n[SYSTEM: SARAH gemte en note: '{titel}']")
+        logger.info(f"\n[SYSTEM: SARAH gemte en note: '{titel}']")
 
     def _build_context(self):
         nu = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -151,7 +167,7 @@ class SarahV0_2:
                     self.tilfoej_note(titel, indhold)
                     svar = svar[:svar.index("[GEM_NOTE:")] + svar[slut + 1:]
             except ValueError:
-                print("[SYSTEM: Kunne ikke parse SARAHs note-kommando korrekt]")
+                logger.error("[SYSTEM: Kunne ikke parse SARAHs note-kommando korrekt]")
 
         # 2. Håndtering af Smart Home (Home Assistant)
         if "[HA_ACTION:" in svar:
@@ -175,15 +191,15 @@ class SarahV0_2:
                             ok = False
 
                         if ok:
-                            print(f"\n[SYSTEM: Home Assistant udførte '{handling}' på {entity_id}]")
+                            logger.info(f"\n[SYSTEM: Home Assistant udførte '{handling}' på {entity_id}]")
                         else:
-                            print(f"\n[SYSTEM: Home Assistant kunne ikke udføre '{handling}' på {entity_id}]")
+                            logger.error(f"\n[SYSTEM: Home Assistant kunne ikke udføre '{handling}' på {entity_id}]")
                     else:
-                        print("\n[SYSTEM: HA_ACTION afvist - Home Assistant er offline]")
+                        logger.warning("\n[SYSTEM: HA_ACTION afvist - Home Assistant er offline]")
 
                     svar = svar[:svar.index("[HA_ACTION:")] + svar[slut + 1:]
             except ValueError:
-                print("[SYSTEM: Kunne ikke parse SARAHs HA-kommando korrekt]")
+                logger.error("[SYSTEM: Kunne ikke parse SARAHs HA-kommando korrekt]")
 
         return svar.strip()
 
@@ -200,9 +216,23 @@ class SarahV0_2:
             {'role': 'user', 'content': besked}
         ]
 
-        print("Beregner svar...")
-        response = ollama.chat(model=self.model, messages=messages)
-        svar = response['message']['content']
+        logger.info("Beregner svar...")
+        try:
+            response = ollama.chat(model=self.model, messages=messages)
+            svar = response['message']['content']
+        except ollama.ResponseError as fejl:
+            logger.error(f"Ollama kunne ikke bruge modellen {self.model}: {fejl}")
+            svar = (
+                f"Ollama kunne ikke bruge modellen {self.model}: {fejl}. "
+                f"Tjek modellen med ollama list, eller hent den med ollama pull {self.model}."
+            )
+        except httpx.ConnectError:
+            logger.error("Kan ikke forbinde til Ollama. Start Ollama-tjenesten, og prøv igen.")
+            svar = "Jeg kan ikke forbinde til Ollama. Start Ollama-tjenesten, og prøv igen."
+        except ConnectionError:
+            logger.error("Kan ikke forbinde til Ollama. Start Ollama-tjenesten, og prøv igen.")
+            svar = "Jeg kan ikke forbinde til Ollama. Start Ollama-tjenesten, og prøv igen."
+
         self.samtale.extend(
             [
                 {"role": "user", "content": besked},
@@ -255,17 +285,17 @@ SarahV0_1 = SarahV0_2
 
 
 def koer_stemmesamtale(sarah, stemme):
-    print("SARAH er klar. Tryk Enter for at tale; sig 'farvel' eller 'exit' for at stoppe.")
+    logger.info("SARAH er klar. Tryk Enter for at tale; sig 'farvel' eller 'exit' for at stoppe.")
     while True:
         try:
             lyd = stemme.optag()
         except EOFError:
             break
         except KeyboardInterrupt:
-            print("\nSARAH lukker ned.")
+            logger.info("SARAH lukker ned.")
             break
         except RuntimeError as fejl:
-            print(f"Stemmefejl: {fejl}")
+            logger.error(f"Stemmefejl: {fejl}")
             break
 
         if lyd is None:
@@ -277,7 +307,7 @@ def koer_stemmesamtale(sarah, stemme):
             stemme.sig("Jeg kunne ikke forstå det. Prøv igen.")
             continue
 
-        print(f"\nDig: {besked}")
+        logger.info(f"\nDig: {besked}")
         if besked.casefold().strip(" .!?") in {"exit", "quit", "farvel"}:
             stemme.sig("Farvel.")
             break
@@ -285,15 +315,15 @@ def koer_stemmesamtale(sarah, stemme):
         try:
             svar = sarah.snak(besked)
         except ollama.ResponseError as fejl:
-            svar = (
-                f"Ollama kunne ikke bruge modellen {sarah.model}: {fejl}. "
-                f"Tjek modellen med ollama list, eller hent den med ollama pull {sarah.model}."
-            )
+            logger.error(f"Ollama kunne ikke bruge modellen '{sarah.model}': {fejl}")
+            print(f"Tjek modellen med: ollama list  |  Hent den med: ollama pull {sarah.model}")
+            continue
         except httpx.ConnectError:
-            svar = "Jeg kan ikke forbinde til Ollama. Start Ollama-tjenesten, og prøv igen."
+            logger.error("Kan ikke forbinde til Ollama. Start Ollama-tjenesten, og prøv igen.")
+            continue
         except ConnectionError:
-            svar = "Jeg kan ikke forbinde til Ollama. Start Ollama-tjenesten, og prøv igen."
-
+            logger.error("Kan ikke forbinde til Ollama. Start Ollama-tjenesten, og prøv igen.")
+            continue
         print(f"\nSARAH: {svar}")
         stemme.sig(svar)
 
@@ -317,7 +347,7 @@ if __name__ == "__main__":
             parser.exit(1, f"Stemmefejl: {fejl}\n")
         raise SystemExit(0)
 
-    print("SARAH v0.2 er online. Skriv 'exit' for at afslutte.")
+    logger.info("SARAH v0.2 er online. Skriv 'exit' for at afslutte.")
 
     while True:
         try:
@@ -332,13 +362,13 @@ if __name__ == "__main__":
         try:
             svar = sarah.snak(bruger_input)
         except ollama.ResponseError as fejl:
-            print(f"Ollama kunne ikke bruge modellen '{sarah.model}': {fejl}")
+            logger.error(f"Ollama kunne ikke bruge modellen '{sarah.model}': {fejl}")
             print(f"Tjek modellen med: ollama list  |  Hent den med: ollama pull {sarah.model}")
             continue
         except httpx.ConnectError:
-            print("Kan ikke forbinde til Ollama. Start Ollama-tjenesten, og prøv igen.")
+            logger.error("Kan ikke forbinde til Ollama. Start Ollama-tjenesten, og prøv igen.")
             continue
         except ConnectionError:
-            print("Kan ikke forbinde til Ollama. Start Ollama-tjenesten, og prøv igen.")
+            logger.error("Kan ikke forbinde til Ollama. Start Ollama-tjenesten, og prøv igen.")
             continue
         print(f"\nSARAH: {svar}")
