@@ -12,10 +12,11 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from moduler.program_manager import ProgramManager
+from moduler.ha_api import HomeAssistantAPI
 from ai_core.voice_io import LokalStemme
 
 
-class SarahV0_1:
+class SarahV0_2:
     PROGRAM_ALIASES = {
         "dashboard": {"dashboard", "kontrolpanel"},
         "hardwarelager": {
@@ -43,27 +44,42 @@ class SarahV0_1:
 
         self.erfaringer = self._load_json(self.memory_path)
         self.noter = self._load_json(self.notes_path)
+
         if not all(isinstance(erfaring, str) for erfaring in self.erfaringer):
             raise ValueError(f"Erfaringsfilen skal kun indeholde tekster: {self.memory_path}")
         if not all(
-            isinstance(note, dict)
-            and all(
-                isinstance(note.get(felt), str)
-                for felt in ("titel", "indhold", "tidspunkt")
-            )
-            for note in self.noter
+                isinstance(note, dict)
+                and all(
+                    isinstance(note.get(felt), str)
+                    for felt in ("titel", "indhold", "tidspunkt")
+                )
+                for note in self.noter
         ):
             raise ValueError(f"Note-filen indeholder ugyldige noter: {self.notes_path}")
+
         self.samtale = []
         self.program_manager = ProgramManager(server_mode=server_mode)
+
+        # Smart Home Integration
+        self.ha = HomeAssistantAPI()
+        self.ha_online = self.ha.is_connected()
+        if self.ha_online:
+            print("[SYSTEM: SARAH har etableret forbindelse til Home Assistant]")
+        else:
+            print("[SYSTEM: Advarsel - Kunne ikke forbinde til Home Assistant. Tjek .env]")
 
         self.system_prompt = (
             "Du er SARAH (Simpel Autonom Realtids Assistent for Hjemmet). "
             "Du er en selvstændig, lokal AI med personlighed. Du er direkte, skarpsindig og logisk tænkende. "
-            "Du er IKKE en underdanig tjener. Du siger fra, hvis anmodninger er ulogiske. Svar altid på dansk. "
-            "Du er en prototype og kan ikke styre smart-home-enheder eller Home Assistant endnu. "
+            "Du er IKKE en underdanig tjener. Du siger fra, hvis anmodninger er ulogiske. Svar altid på dansk.\n\n"
+            "SMART HOME STYRING:\n"
+            "Du har direkte adgang til at styre smart-home-enheder via Home Assistant. "
+            "Hvis brugeren beder dig tænde, slukke eller skifte tilstand på en enhed, SKAL du inkludere en handlingstag i dit svar:\n"
+            "[HA_ACTION: <turn_on|turn_off|toggle> | <entity_id>]\n"
+            "Eksempel: 'Forstået, jeg tænder lyset i stuen. [HA_ACTION: turn_on | light.stue]'\n\n"
+            "NOTER:\n"
             "Du har evnen til at gemme noter for brugeren. "
-            "VIKTIGT: Hvis brugeren beder dig om at huske noget, skrive noget ned, eller tilføje til en liste, "
+            "Hvis brugeren beder dig om at huske noget, skrive noget ned, eller tilføje til en liste, "
             "SKAL du svare med følgende format i din tekst, i tillæg til dit normale svar:\n"
             "[GEM_NOTE: <Titlen på noten> | <Selve indholdet>]\n"
             "Eksempel: 'Det er noteret. [GEM_NOTE: Indkøb | Mælk og brød]'\n"
@@ -99,6 +115,15 @@ class SarahV0_1:
     def _build_context(self):
         nu = datetime.now().strftime("%Y-%m-%d %H:%M")
         kontekst = f"{self.system_prompt}\nAktuel tid og dato: {nu}\n"
+        kontekst += f"Home Assistant status: {'Online' if self.ha_online else 'Offline'}\n"
+
+        # Dynamisk indlæsning af dine reelle Home Assistant enheder
+        if self.ha_online:
+            entities = self.ha.get_all_entities()
+            if entities:
+                kontekst += "\nTilgængelige Smart Home Enheder i Home Assistant:\n"
+                for ent in entities:
+                    kontekst += f"- {ent}\n"
 
         if self.erfaringer:
             kontekst += "\nDine tidligere refleksioner:\n"
@@ -109,16 +134,14 @@ class SarahV0_1:
             kontekst += "\nHer er dine nuværende gemte noter:\n"
             for note in self.noter:
                 kontekst += f"- {note['tidspunkt']} - {note['titel']}: {note['indhold']}\n"
-        else:
-            kontekst += "\nDu har ingen noter gemt lige nu.\n"
 
         return kontekst
 
     def parser_handling(self, svar):
-        """Leder efter 'hemmelige' kommandoer i SARAHs svar."""
+        """Leder efter system-kommandoer i SARAHs svar og udfører dem i baggrunden."""
+        # 1. Håndtering af Noter
         if "[GEM_NOTE:" in svar:
             try:
-                # Simpel udtrækning af data mellem brackets
                 start = svar.index("[GEM_NOTE:") + 10
                 slut = svar.index("]", start)
                 note_data = svar[start:slut].split("|")
@@ -126,11 +149,42 @@ class SarahV0_1:
                     titel = note_data[0].strip()
                     indhold = note_data[1].strip()
                     self.tilfoej_note(titel, indhold)
-
-                    # Fjern handlingsteksten fra det, brugeren ser, så det ser naturligt ud
                     svar = svar[:svar.index("[GEM_NOTE:")] + svar[slut + 1:]
             except ValueError:
                 print("[SYSTEM: Kunne ikke parse SARAHs note-kommando korrekt]")
+
+        # 2. Håndtering af Smart Home (Home Assistant)
+        if "[HA_ACTION:" in svar:
+            try:
+                start = svar.index("[HA_ACTION:") + 11
+                slut = svar.index("]", start)
+                ha_data = svar[start:slut].split("|")
+                if len(ha_data) == 2:
+                    handling = ha_data[0].strip().lower()
+                    entity_id = ha_data[1].strip()
+
+                    if self.ha_online:
+                        if handling == "turn_on":
+                            ok = self.ha.turn_on(entity_id)
+                        elif handling == "turn_off":
+                            ok = self.ha.turn_off(entity_id)
+                        elif handling == "toggle":
+                            domain = entity_id.split('.')[0]
+                            ok = self.ha.call_service(domain, "toggle", entity_id=entity_id)
+                        else:
+                            ok = False
+
+                        if ok:
+                            print(f"\n[SYSTEM: Home Assistant udførte '{handling}' på {entity_id}]")
+                        else:
+                            print(f"\n[SYSTEM: Home Assistant kunne ikke udføre '{handling}' på {entity_id}]")
+                    else:
+                        print("\n[SYSTEM: HA_ACTION afvist - Home Assistant er offline]")
+
+                    svar = svar[:svar.index("[HA_ACTION:")] + svar[slut + 1:]
+            except ValueError:
+                print("[SYSTEM: Kunne ikke parse SARAHs HA-kommando korrekt]")
+
         return svar.strip()
 
     def snak(self, besked):
@@ -146,7 +200,7 @@ class SarahV0_1:
             {'role': 'user', 'content': besked}
         ]
 
-        print(f"Beregner svar...")
+        print("Beregner svar...")
         response = ollama.chat(model=self.model, messages=messages)
         svar = response['message']['content']
         self.samtale.extend(
@@ -157,7 +211,7 @@ class SarahV0_1:
         )
         self.samtale = self.samtale[-20:]
 
-        # Tjek om hun forsøger at gemme en note, før vi viser svaret
+        # Tjek om hun forsøger at gemme en note eller køre en HA-handling
         renset_svar = self.parser_handling(svar)
 
         return renset_svar
@@ -172,7 +226,7 @@ class SarahV0_1:
         }:
             return (
                 "Jeg kan starte dashboardet, hardwarelageret og musikarkivaren. "
-                "Netværksscanneren og Home Assistant-integrationen er ikke implementeret endnu."
+                "Netværksscanneren er endnu ikke tilgængelig i menuen."
             )
 
         match = self.START_KOMMANDO.fullmatch(tekst)
@@ -184,7 +238,7 @@ class SarahV0_1:
             if navn in aliases:
                 return self.program_manager.start(program)
 
-        if navn in {"netværksscanner", "netværksscanneren", "home assistant", "homeassistant"}:
+        if navn in {"netværksscanner", "netværksscanneren"}:
             return (
                 f"{navn} kan ikke startes endnu: modulet er ikke implementeret. "
                 "Der er ikke foretaget nogen ændringer."
@@ -194,6 +248,10 @@ class SarahV0_1:
             f"Jeg kender ikke programmet '{navn}'. "
             "Sig 'hvilke programmer kan du starte?' for at se mulighederne."
         )
+
+
+# Backward compatibility alias
+SarahV0_1 = SarahV0_2
 
 
 def koer_stemmesamtale(sarah, stemme):
@@ -251,7 +309,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    sarah = SarahV0_1()
+    sarah = SarahV0_2()
     if args.voice:
         try:
             koer_stemmesamtale(sarah, LokalStemme())
@@ -259,7 +317,7 @@ if __name__ == "__main__":
             parser.exit(1, f"Stemmefejl: {fejl}\n")
         raise SystemExit(0)
 
-    print("SARAH v0.1 er online. Skriv 'exit' for at afslutte.")
+    print("SARAH v0.2 er online. Skriv 'exit' for at afslutte.")
 
     while True:
         try:
