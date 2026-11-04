@@ -1,0 +1,49 @@
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama-data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  sarah:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      SARAH_MODEL: ${SARAH_MODEL:-llama3.1}
+      SARAH_HOST: 0.0.0.0
+      SARAH_PORT: 8000
+      SARAH_API_TOKEN: ${SARAH_API_TOKEN:?Set SARAH_API_TOKEN in .env}
+      MUSIC_DOWNLOAD_PATH: /app/data/music
+      HA_URL: ${HA_URL:-}
+      HA_TOKEN: ${HA_TOKEN:-}
+    ports:
+      - "127.0.0.1:${SARAH_PORT:-8000}:8000"
+    volumes:
+      - sarah-data:/app/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)"
+      interval: 15s
+      timeout: 8s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  ollama-data:
+  sarah-data:

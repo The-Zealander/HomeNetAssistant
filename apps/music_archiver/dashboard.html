@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lokalsystemet · Music</title>
+  <style>
+    :root { color-scheme: dark; font: 15px system-ui, sans-serif; background: #10151c; color: #e8edf4; }
+    * { box-sizing: border-box; }
+    body { max-width: 1100px; margin: 0 auto; padding: 28px 18px 48px; }
+    header { display: flex; align-items: end; justify-content: space-between; gap: 20px; margin-bottom: 22px; }
+    h1 { margin: 0; font-size: clamp(1.6rem, 4vw, 2.2rem); }
+    h2 { margin: 0 0 14px; font-size: 1.1rem; }
+    p { color: #aeb9c7; margin: 7px 0 0; }
+    section { background: #19222d; border: 1px solid #2a3949; border-radius: 12px; padding: 18px; margin: 14px 0; }
+    label { display: block; color: #c1ccd8; margin-bottom: 7px; }
+    input, textarea { width: 100%; border: 1px solid #3a4a5d; border-radius: 7px; padding: 10px 12px; background: #101720; color: #fff; font: inherit; }
+    textarea { min-height: 100px; resize: vertical; }
+    button { border: 0; border-radius: 7px; padding: 9px 13px; color: white; background: #2869b2; font: inherit; cursor: pointer; }
+    button.secondary { background: #354252; }
+    button.danger { background: #823d42; }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+    .token { max-width: 490px; margin-left: auto; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 8px; text-align: left; vertical-align: top; border-bottom: 1px solid #2a3949; }
+    th { color: #9eafc2; font-size: .85rem; }
+    td.url { overflow-wrap: anywhere; min-width: 260px; }
+    .status { white-space: nowrap; color: #9dc7ff; }
+    .status.failed { color: #ff9b9b; }
+    .status.completed { color: #91dbac; }
+    #logs { max-height: 220px; overflow: auto; white-space: pre-wrap; font: 13px ui-monospace, monospace; color: #cbd5e1; }
+    #notice { min-height: 1.4em; color: #ffcc80; }
+    .muted { color: #9eafc2; font-size: .9rem; }
+    @media (max-width: 640px) { header { align-items: start; flex-direction: column; } .token { margin-left: 0; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div><h1>Musikarkivar</h1><p>Tilføj YouTube-links, og lad serveren hente dem én ad gangen.</p></div>
+    <div class="token">
+      <label for="token">Servernøgle</label>
+      <input id="token" type="password" autocomplete="off" placeholder="Kun værdien fra .env">
+      <div class="toolbar">
+        <button id="save-token" type="button">Gem og test nøgle</button>
+      </div>
+    </div>
+  </header>
+
+  <section>
+    <h2>Tilføj til downloadkø</h2>
+    <label for="urls">Ét YouTube- eller YouTube Music-link pr. linje</label>
+    <textarea id="urls" placeholder="https://music.youtube.com/playlist?list=…"></textarea>
+    <div class="toolbar">
+      <button id="add">Tilføj og start kø</button>
+      <span class="muted">Køen fortsætter på serveren, selvom browseren lukkes.</span>
+      <span id="notice" role="status"></span>
+    </div>
+  </section>
+
+  <section>
+    <h2>Kø</h2>
+    <div class="toolbar" style="margin:0 0 10px">
+      <button id="pause" class="secondary">Pause kø</button>
+      <button id="resume" class="secondary">Fortsæt kø</button>
+      <button id="clear" class="danger">Ryd afsluttede</button>
+      <button id="audit" class="secondary">Tjek bibliotek</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Status</th><th>Link</th><th>Detalje</th><th></th></tr></thead>
+        <tbody id="jobs"><tr><td colspan="4" class="muted">Indlæser kø…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>Aktivitet</h2>
+    <div id="logs" aria-live="polite">Venter på aktivitet.</div>
+  </section>
+
+  <script>
+    const tokenInput = document.querySelector("#token");
+    const urlsInput = document.querySelector("#urls");
+    const jobsBody = document.querySelector("#jobs");
+    const logsBox = document.querySelector("#logs");
+    const notice = document.querySelector("#notice");
+    tokenInput.value = sessionStorage.getItem("sarahApiToken") || "";
+
+    async function api(path, options = {}) {
+      const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+      if (tokenInput.value.trim()) headers.Authorization = `Bearer ${tokenInput.value.trim()}`;
+      const response = await fetch(path, { ...options, headers });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 401) {
+          sessionStorage.removeItem("sarahApiToken");
+          throw new Error("API-nøglen mangler eller er forkert. Indsæt kun værdien fra SARAH_API_TOKEN i .env, og vælg “Gem og test nøgle”.");
+        }
+        const detail = typeof data.detail === "string" ? data.detail : response.statusText;
+        throw new Error(detail || `HTTP ${response.status}`);
+      }
+      return data;
+    }
+
+    function setNotice(text) { notice.textContent = text; }
+    function render(state) {
+      const jobs = state.jobs || [];
+      jobsBody.replaceChildren();
+      if (!jobs.length) {
+        const row = jobsBody.insertRow();
+        const cell = row.insertCell();
+        cell.colSpan = 4;
+        cell.className = "muted";
+        cell.textContent = "Køen er tom.";
+      }
+      for (const job of jobs) {
+        const row = jobsBody.insertRow();
+        const status = row.insertCell();
+        status.className = `status ${job.status}`;
+        status.textContent = job.status === "queued" ? "I kø" :
+          job.status === "processing" ? "Henter…" :
+          job.status === "completed" ? "Færdig" : "Fejl";
+        const url = row.insertCell();
+        url.className = "url";
+        url.textContent = job.url;
+        const detail = row.insertCell();
+        detail.textContent = job.message || "";
+        const actions = row.insertCell();
+        if (job.status === "queued") {
+          const remove = document.createElement("button");
+          remove.textContent = "Fjern";
+          remove.className = "danger";
+          remove.addEventListener("click", async () => {
+            try { await api(`/api/music/queue/${encodeURIComponent(job.id)}`, { method: "DELETE" }); await refresh(); }
+            catch (error) { setNotice(error.message); }
+          });
+          actions.append(remove);
+        }
+      }
+      const logs = state.logs || [];
+      logsBox.textContent = logs.length
+        ? logs.map(item => `[${item.job_id}] ${item.message}`).join("\n")
+        : "Venter på aktivitet.";
+      logsBox.scrollTop = logsBox.scrollHeight;
+      document.querySelector("#pause").disabled = state.paused || !state.running;
+      document.querySelector("#resume").disabled = !state.paused;
+    }
+
+    async function refresh() {
+      try {
+        const state = await api("/api/music/queue");
+        render(state);
+        setNotice("");
+      } catch (error) {
+        setNotice(error.message);
+      }
+    }
+
+    document.querySelector("#save-token").addEventListener("click", async () => {
+      const token = tokenInput.value.trim();
+      if (token) sessionStorage.setItem("sarahApiToken", token);
+      else sessionStorage.removeItem("sarahApiToken");
+      setNotice("Tester adgang…");
+      try {
+        await api("/api/music/queue");
+        setNotice("Nøgle gemt og godkendt.");
+        await refresh();
+      } catch (error) { setNotice(error.message); }
+    });
+    document.querySelector("#add").addEventListener("click", async () => {
+      const urls = urlsInput.value.split(/\r?\n/).map(url => url.trim()).filter(Boolean);
+      if (!urls.length) { setNotice("Indsæt mindst ét link."); return; }
+      try {
+        await api("/api/music/queue", { method: "POST", body: JSON.stringify({ urls }) });
+        urlsInput.value = "";
+        setNotice(`${urls.length} link(s) føjet til køen.`);
+        await refresh();
+      } catch (error) { setNotice(error.message); }
+    });
+    document.querySelector("#pause").addEventListener("click", async () => {
+      try { await api("/api/music/queue/pause", { method: "POST" }); await refresh(); }
+      catch (error) { setNotice(error.message); }
+    });
+    document.querySelector("#resume").addEventListener("click", async () => {
+      try { await api("/api/music/queue/resume", { method: "POST" }); await refresh(); }
+      catch (error) { setNotice(error.message); }
+    });
+    document.querySelector("#clear").addEventListener("click", async () => {
+      try { await api("/api/music/queue/finished", { method: "DELETE" }); await refresh(); }
+      catch (error) { setNotice(error.message); }
+    });
+    document.querySelector("#audit").addEventListener("click", async () => {
+      try {
+        const report = await api("/api/music/library");
+        setNotice(`Tjekket ${report.total_files} filer · mangler cover: ${report.missing_covers} · duplikater: ${report.duplicate_groups}`);
+      } catch (error) { setNotice(error.message); }
+    });
+    refresh();
+    setInterval(refresh, 2500);
+  </script>
+</body>
+</html>

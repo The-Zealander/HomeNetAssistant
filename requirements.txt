@@ -1,0 +1,6 @@
+-r requirements-server.txt
+-r requirements-music.txt
+
+customtkinter>=5.2,<6
+faster-whisper>=1.1,<2
+sounddevice>=0.5,<1

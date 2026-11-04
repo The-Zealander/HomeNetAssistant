@@ -1,0 +1,9 @@
+fastapi>=0.103,<0.104
+httpx>=0.27,<1
+ollama>=0.4,<1
+mutagen
+numpy
+python-dotenv
+requests
+yt-dlp
+uvicorn>=0.23.2,<0.24

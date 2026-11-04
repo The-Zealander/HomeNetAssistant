@@ -1,0 +1,11 @@
+IP: 192.168.0.1     | MAC: 68:7f:f0:66:ac:8c | Navn: _gateway
+IP: 192.168.0.56    | MAC: d4:f5:47:a4:41:05 | Navn: Ukendt Navn
+IP: 192.168.0.67    | MAC: fa:f9:ec:6a:be:22 | Navn: Ukendt Navn
+IP: 192.168.0.71    | MAC: 70:c9:32:8f:68:0f | Navn: Ukendt Navn
+IP: 192.168.0.102   | MAC: Ukendt MAC        | Navn: ZakariasPC
+IP: 192.168.0.104   | MAC: d8:44:89:ad:28:2a | Navn: Ukendt Navn
+IP: 192.168.0.110   | MAC: 1c:53:f9:34:cc:0e | Navn: Ukendt Navn
+IP: 192.168.0.183   | MAC: 70:c9:32:33:92:55 | Navn: Ukendt Navn
+IP: 192.168.0.184   | MAC: 3c:6a:d2:c0:19:b5 | Navn: Ukendt Navn
+IP: 192.168.0.193   | MAC: b4:a9:fc:5f:82:35 | Navn: homeassistant
+IP: 192.168.0.227   | MAC: e0:37:bf:8e:d8:9f | Navn: Ukendt Navn

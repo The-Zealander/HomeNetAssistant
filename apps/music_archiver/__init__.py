@@ -1,0 +1,1 @@
+"""Music archiving application."""

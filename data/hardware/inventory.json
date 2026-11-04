@@ -1,0 +1,97 @@
+[
+  {
+    "id": 1,
+    "kategori": "CPU",
+    "brand": "AMD",
+    "navn": "RYZEN 3 3200G",
+    "release_year": "2019",
+    "specs": "",
+    "antal": "1",
+    "status": "Ledig på lager",
+    "purpose": "",
+    "tags": [],
+    "details": {
+      "socket": "AM 4",
+      "igpu": "Ja",
+      "tdp": "65",
+      "cores": "4",
+      "threads": "4"
+    },
+    "search_text": "cpu amd ryzen 3 3200g ledig på lager socket am 4 igpu ja tdp 65 cores 4 threads 4"
+  },
+  {
+    "id": 2,
+    "kategori": "CPU",
+    "brand": "AMD",
+    "navn": "RYZEN 5 3600",
+    "release_year": "2019",
+    "specs": "",
+    "antal": "1",
+    "status": "Ledig på lager",
+    "purpose": "",
+    "tags": [],
+    "details": {
+      "socket": "AM4",
+      "igpu": "Nej",
+      "tdp": "65",
+      "cores": "6",
+      "threads": "12"
+    },
+    "search_text": "cpu amd ryzen 5 3600 ledig på lager socket am4 igpu nej tdp 65 cores 6 threads 12"
+  },
+  {
+    "id": 3,
+    "kategori": "Bundkort",
+    "brand": "ASUS",
+    "navn": "B650-PLUS WIFI",
+    "release_year": "",
+    "specs": "",
+    "antal": "1",
+    "status": "Ledig på lager",
+    "purpose": "",
+    "tags": [],
+    "details": {
+      "chipset": "B650",
+      "socket": "AM5"
+    },
+    "search_text": "bundkort asus b650-plus wifi ledig på lager chipset b650 socket am5"
+  },
+  {
+    "id": 4,
+    "kategori": "GPU",
+    "brand": "NVIDIA",
+    "navn": "QUADRO K620",
+    "release_year": "2014",
+    "specs": "",
+    "antal": "2",
+    "status": "Ledig på lager",
+    "purpose": "",
+    "tags": [],
+    "details": {
+      "vram": "2 GB",
+      "low_profile": "Ja",
+      "slot_count": "1",
+      "external_power": "Nej"
+    },
+    "search_text": "gpu nvidia quadro k620 ledig på lager vram 2 gb low_profile ja slot_count 1 external_power nej"
+  },
+  {
+    "id": 5,
+    "kategori": "GPU",
+    "brand": "NVIDIA",
+    "navn": "QUADRO 400",
+    "release_year": "2011",
+    "specs": "",
+    "antal": "1",
+    "status": "Ledig på lager",
+    "purpose": "",
+    "tags": [],
+    "details": {
+      "vram": "512 MB",
+      "low_profile": "Ja",
+      "slot_count": "1",
+      "external_power": "Nej"
+    },
+    "search_text": "gpu nvidia quadro 400 ledig på lager vram 512 mb low_profile ja slot_count 1 external_power nej"
+  }
+]

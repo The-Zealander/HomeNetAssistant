@@ -1,0 +1,770 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111827">
+  <title>Lokalsystemet</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font: 15px/1.5 system-ui, sans-serif;
+      background: #10151c;
+      color: #e8edf4;
+      --panel: #19222d;
+      --line: #2a3949;
+      --muted: #aeb9c7;
+      --blue: #2869b2;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; }
+    button, input, select { font: inherit; }
+    button {
+      border: 0; border-radius: 7px; padding: 9px 13px;
+      color: white; background: var(--blue); cursor: pointer;
+    }
+    button.secondary { background: #354252; }
+    button:disabled { opacity: .55; cursor: wait; }
+    input:not([type="range"]), select {
+      width: 100%; border: 1px solid #3a4a5d; border-radius: 7px;
+      padding: 10px 12px; color: white; background: #101720;
+    }
+    label { display: block; color: #c1ccd8; margin-bottom: 5px; }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { font-size: 1.65rem; margin-bottom: 0; }
+    h2 { font-size: 1.2rem; }
+    a { color: #9dc7ff; }
+    .layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); min-height: 100vh; }
+    aside { padding: 22px 14px; background: #151d27; border-right: 1px solid var(--line); }
+    .brand { display: flex; gap: 10px; align-items: center; padding: 0 8px 20px; }
+    .brand-mark { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; background: #245c91; font-weight: 800; }
+    nav { display: grid; gap: 5px; }
+    nav button { text-align: left; background: transparent; color: #c3ceda; }
+    nav button.active, nav button:hover { background: #263547; color: white; }
+    .side-links { display: grid; gap: 9px; margin: 22px 8px; }
+    main { width: min(1120px, 100%); padding: 25px clamp(16px, 4vw, 42px) 50px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 22px; }
+    .header-copy p { margin: 4px 0 0; color: var(--muted); }
+    .token { width: min(310px, 44%); }
+    .token .toolbar { margin: 7px 0 0; }
+    .panel { padding: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; margin: 14px 0; }
+    .grid { display: grid; gap: 13px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+    .service-card { padding: 16px; border: 1px solid var(--line); background: #151d27; border-radius: 10px; }
+    .service-card strong { display: block; font-size: 1.05rem; }
+    .service-state { color: #9dc7ff; }
+    .muted { color: var(--muted); }
+    .notice { min-height: 1.5em; color: #ffcc80; }
+    .view { display: none; }
+    .view.active { display: block; }
+    .chat-log { display: grid; gap: 10px; min-height: 180px; max-height: 430px; overflow: auto; margin-bottom: 14px; }
+    .message { max-width: 88%; padding: 11px 13px; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .message.user { justify-self: end; background: #245c91; }
+    .message.assistant { justify-self: start; background: #273443; }
+    .chat-form { display: flex; gap: 9px; align-items: end; }
+    .chat-form label { flex: 1; }
+    .sarah-stage {
+      display: grid;
+      justify-items: center;
+      gap: 8px;
+      padding: 22px 14px 18px;
+      margin: 0 0 18px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: radial-gradient(ellipse at center, #202f40 0, #151d27 68%);
+      text-align: center;
+    }
+    .sarah-avatar {
+      --avatar-glow: #4aa3ff;
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 146px;
+      aspect-ratio: 1;
+      border: 1px solid #47749a;
+      border-radius: 50%;
+      background: radial-gradient(circle at 50% 38%, #293e53, #101923 72%);
+      box-shadow: 0 0 25px color-mix(in srgb, var(--avatar-glow) 35%, transparent),
+        inset 0 0 24px #3b8ed322;
+      transition: box-shadow .25s, border-color .25s;
+    }
+    .sarah-avatar::before, .sarah-avatar::after {
+      position: absolute;
+      content: "";
+      border: 1px solid color-mix(in srgb, var(--avatar-glow) 55%, transparent);
+      border-radius: 50%;
+      inset: -8px;
+      opacity: .35;
+      transition: transform .3s, opacity .3s;
+    }
+    .sarah-avatar::after { inset: -16px; opacity: .18; }
+    .sarah-face { display: grid; justify-items: center; gap: 17px; }
+    .sarah-eyes { display: flex; gap: 25px; }
+    .sarah-eye {
+      width: 13px;
+      height: 17px;
+      border-radius: 50%;
+      background: #91d4ff;
+      box-shadow: 0 0 12px #4aa3ff;
+      animation: blink 5s infinite;
+    }
+    .sarah-eye:nth-child(2) { animation-delay: .12s; }
+    .sarah-mouth {
+      width: 30px;
+      height: 5px;
+      border-radius: 50%;
+      background: #76c6ff;
+      box-shadow: 0 0 9px #4aa3ff;
+      transition: width .15s, height .15s, border-radius .15s;
+    }
+    .sarah-avatar[data-state="listening"] { --avatar-glow: #54d6bd; border-color: #54d6bd; }
+    .sarah-avatar[data-state="listening"]::before { transform: scale(1.09); opacity: .8; }
+    .sarah-avatar[data-state="thinking"] { --avatar-glow: #d7adff; border-color: #b98bea; }
+    .sarah-avatar[data-state="thinking"]::before { animation: pulse 1.4s ease-in-out infinite; }
+    .sarah-avatar[data-state="speaking"] { --avatar-glow: #75baff; }
+    .sarah-avatar[data-state="speaking"] .sarah-mouth {
+      width: 20px;
+      height: 13px;
+      border-radius: 45%;
+      animation: talk .22s ease-in-out infinite alternate;
+    }
+    .sarah-name { margin: 2px 0 0; font-size: .9rem; font-weight: 700; letter-spacing: .22em; }
+    .sarah-state { min-height: 1.4em; margin: 0; color: var(--muted); }
+    .voice-controls { align-items: center; }
+    .voice-controls label { display: flex; align-items: center; gap: 8px; margin: 0; }
+    .voice-controls input { width: auto; }
+    .voice-controls select { max-width: 230px; }
+    @keyframes blink {
+      0%, 46%, 50%, 100% { transform: scaleY(1); }
+      48% { transform: scaleY(.12); }
+    }
+    @keyframes pulse {
+      50% { transform: scale(1.07); opacity: .45; }
+    }
+    @keyframes talk {
+      to { transform: scaleY(.55); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; }
+    }
+    .toolbar { display: flex; flex-wrap: wrap; align-items: end; gap: 9px; margin-bottom: 14px; }
+    .toolbar .search { flex: 1; min-width: 200px; }
+    .entity-list, .hardware-list { display: grid; gap: 10px; }
+    .entity, .hardware-item { padding: 13px; background: #151d27; border: 1px solid var(--line); border-radius: 9px; }
+    .entity { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+    .entity-name { display: block; font-weight: 650; }
+    .entity-meta { color: var(--muted); font-size: .9rem; }
+    .entity-actions { display: flex; flex-wrap: wrap; gap: 5px; }
+    .entity-actions button { padding: 6px 9px; }
+    .entity-actions input[type="range"] { width: 140px; padding: 0; accent-color: var(--blue); }
+    .hardware-item h3 { margin: 0 0 4px; font-size: 1rem; }
+    .hardware-item p { margin: 2px 0; color: var(--muted); }
+    .empty { color: var(--muted); padding: 12px 0; }
+    @media (max-width: 720px) {
+      .layout { grid-template-columns: 1fr; }
+      aside { position: sticky; z-index: 2; top: 0; padding: 8px 12px; border-right: 0; border-bottom: 1px solid var(--line); }
+      .brand { display: none; }
+      nav { display: flex; overflow-x: auto; }
+      nav button { flex: 0 0 auto; padding: 8px 10px; }
+      .side-links { display: none; }
+      header { align-items: stretch; flex-direction: column; }
+      .token { width: 100%; }
+      .entity { grid-template-columns: 1fr; }
+      .chat-form { align-items: stretch; flex-direction: column; }
+      .chat-form button { align-self: end; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <div class="brand"><div class="brand-mark">L</div><strong>Lokalsystemet</strong></div>
+      <nav aria-label="Hovedmenu">
+        <button class="active" data-view="overview">Overblik</button>
+        <button data-view="assistant">SARAH</button>
+        <button data-view="home">Home Assistant</button>
+        <button data-view="hardware">Hardwarelager</button>
+      </nav>
+      <div class="side-links">
+        <a href="/music">Musikarkivar →</a>
+        <a href="/docs">Server API →</a>
+      </div>
+    </aside>
+
+    <main>
+      <header>
+        <div class="header-copy"><h1 id="page-title">Overblik</h1><p>Lokalt kontrolpanel for dine tjenester.</p></div>
+        <div class="token">
+          <label for="api-token">Servernøgle</label>
+          <input id="api-token" type="password" autocomplete="off" placeholder="Kun værdien fra .env">
+          <div class="toolbar">
+            <button id="save-token" type="button">Gem og test nøgle</button>
+            <span id="token-notice" class="notice" role="status"></span>
+          </div>
+        </div>
+      </header>
+
+      <section id="overview" class="view active" aria-labelledby="page-title">
+        <div class="grid">
+          <article class="service-card"><strong>Server</strong><span id="server-state" class="service-state">Tjekker…</span></article>
+          <article class="service-card"><strong>SARAH / Ollama</strong><span id="sarah-state" class="service-state">Tjekker…</span></article>
+          <article class="service-card"><strong>Home Assistant</strong><span id="ha-state" class="service-state">Tjekker…</span></article>
+        </div>
+        <div class="panel">
+          <h2>Kom hurtigt i gang</h2>
+          <p>Chat med SARAH, se Home Assistant-enheder, eller åbn musikarkivarens downloadkø.</p>
+          <div class="toolbar">
+            <button data-open-view="assistant">Åbn SARAH</button>
+            <button class="secondary" data-open-view="home">Se enheder</button>
+            <a href="/music">Åbn musikarkivar →</a>
+          </div>
+          <div id="system-notice" class="notice" role="status"></div>
+          <p id="model-name" class="muted"></p>
+        </div>
+      </section>
+
+      <section id="assistant" class="view" aria-labelledby="page-title">
+        <div class="panel">
+          <h2>SARAH Chat</h2>
+          <p class="muted">Tal eller skriv til SARAH. Mikrofon kræver browseradgang og HTTPS (eller localhost); browserens talegenkendelse kan bruge browserens egen tjeneste.</p>
+          <div id="sarah-avatar" class="sarah-stage" data-state="idle">
+            <div class="sarah-avatar" aria-hidden="true">
+              <div class="sarah-face">
+                <div class="sarah-eyes"><span class="sarah-eye"></span><span class="sarah-eye"></span></div>
+                <span class="sarah-mouth"></span>
+              </div>
+            </div>
+            <p class="sarah-name">SARAH</p>
+            <p id="avatar-status" class="sarah-state" role="status">Klar til at lytte</p>
+          </div>
+          <div class="toolbar voice-controls">
+            <button id="voice-input" class="secondary" type="button">Start talelytning</button>
+            <label for="voice-output">Afspil SARAHs svar
+              <select id="voice-output">
+                <option value="browser">På denne enhed (browser)</option>
+                <option value="home-assistant">På Home Assistant-højttaler</option>
+                <option value="off">Ingen lyd</option>
+              </select>
+            </label>
+            <label for="response-speaker">Højttaler
+              <select id="response-speaker"><option value="">Indlæs Home Assistant først</option></select>
+            </label>
+            <label for="response-tts">Tale
+              <select id="response-tts"><option value="">Indlæs Home Assistant først</option></select>
+            </label>
+            <span id="voice-support" class="muted"></span>
+          </div>
+          <p class="muted">Højttaleroutput bruger Home Assistants TTS-integration. Vælg en lokal motor som Piper for at holde tale lokalt.</p>
+          <div id="chat-log" class="chat-log" aria-live="polite"></div>
+          <form id="chat-form" class="chat-form">
+            <label for="chat-message">Besked
+              <input id="chat-message" maxlength="2000" required placeholder="Skriv til SARAH…">
+            </label>
+            <button id="send-chat" type="submit">Send</button>
+          </form>
+          <div id="chat-notice" class="notice" role="status"></div>
+        </div>
+      </section>
+
+      <section id="home" class="view" aria-labelledby="page-title">
+        <div class="panel">
+          <h2>Home Assistant</h2>
+          <p class="muted">Lys, kontakter, blæsere og medieafspillere kan styres her; andre enheder vises skrivebeskyttet. Medieafspillere har afspilnings- og lydstyrkekontrol.</p>
+          <div class="toolbar">
+            <label class="search" for="entity-filter">Filtrér efter navn eller ID
+              <input id="entity-filter" placeholder="Fx stue eller light.">
+            </label>
+            <label for="entity-domain">Område
+              <select id="entity-domain">
+                <option value="">Alle enheder</option>
+                <option value="light">Lys</option>
+                <option value="switch">Kontakter</option>
+                <option value="fan">Blæsere</option>
+                <option value="media_player">Højttalere og afspillere</option>
+                <option value="climate">Klima</option>
+                <option value="cover">Gardiner og porte</option>
+                <option value="vacuum">Støvsugere</option>
+              </select>
+            </label>
+            <button id="refresh-entities" class="secondary">Opdatér enheder</button>
+          </div>
+          <div id="entity-notice" class="notice" role="status"></div>
+          <div id="entity-list" class="entity-list"><div class="empty">Tryk på “Opdatér enheder”.</div></div>
+        </div>
+      </section>
+
+      <section id="hardware" class="view" aria-labelledby="page-title">
+        <div class="panel">
+          <h2>Hardwarelager</h2>
+          <p class="muted">Foreløbig skrivebeskyttet visning af det lokale hardwarelager.</p>
+          <div class="toolbar">
+            <label class="search" for="hardware-search">Søg
+              <input id="hardware-search" maxlength="200" placeholder="Søg efter brand, model eller tags">
+            </label>
+            <button id="search-hardware" class="secondary">Søg i lager</button>
+          </div>
+          <div id="hardware-notice" class="notice" role="status"></div>
+          <div id="hardware-list" class="hardware-list"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const tokenInput = document.querySelector("#api-token");
+    const notices = {
+      system: document.querySelector("#system-notice"),
+      token: document.querySelector("#token-notice"),
+      chat: document.querySelector("#chat-notice"),
+      home: document.querySelector("#entity-notice"),
+      hardware: document.querySelector("#hardware-notice"),
+    };
+    const titles = {
+      overview: "Overblik", assistant: "SARAH", home: "Home Assistant", hardware: "Hardwarelager",
+    };
+    const avatar = document.querySelector("#sarah-avatar");
+    const avatarStatus = document.querySelector("#avatar-status");
+    const voiceButton = document.querySelector("#voice-input");
+    const voiceOutput = document.querySelector("#voice-output");
+    const speakerSelect = document.querySelector("#response-speaker");
+    const ttsSelect = document.querySelector("#response-tts");
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    let recognition = null;
+    let isListening = false;
+    let recognitionStarting = false;
+    let requestInProgress = false;
+    tokenInput.value = sessionStorage.getItem("sarahApiToken") || "";
+
+    async function api(path, options = {}) {
+      const headers = { ...(options.headers || {}) };
+      if (tokenInput.value.trim()) headers.Authorization = `Bearer ${tokenInput.value.trim()}`;
+      if (options.body) headers["Content-Type"] = "application/json";
+      const response = await fetch(path, { ...options, headers });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 401) {
+          sessionStorage.removeItem("sarahApiToken");
+          throw new Error("API-nøglen mangler eller er forkert. Indsæt kun værdien fra SARAH_API_TOKEN i .env, og vælg “Gem og test nøgle”.");
+        }
+        const detail = typeof data.detail === "string" ? data.detail : response.statusText;
+        throw new Error(detail || `HTTP ${response.status}`);
+      }
+      return data;
+    }
+
+    function showNotice(target, text) { target.textContent = text; }
+    function setAvatarState(state, label) {
+      avatar.dataset.state = state;
+      avatarStatus.textContent = label;
+    }
+
+    function stopSpeaking() {
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    }
+
+    async function speakReply(text) {
+      if (voiceOutput.value === "off") {
+        setAvatarState("idle", "Klar til at lytte");
+        return;
+      }
+      if (voiceOutput.value === "home-assistant") {
+        const speaker = speakerSelect.value;
+        const tts = ttsSelect.value;
+        if (!speaker || !tts) {
+          showNotice(notices.chat, "Vælg en Home Assistant-højttaler og en TTS-motor. Installér fx Piper i Home Assistant for lokal tale.");
+          setAvatarState("idle", "Klar til at lytte");
+          return;
+        }
+        setAvatarState("speaking", "SARAH taler på Home Assistant-højttaleren…");
+        try {
+          await api("/api/home-assistant/speak", {
+            method: "POST",
+            body: JSON.stringify({
+              media_player_entity_id: speaker,
+              tts_entity_id: tts,
+              message: text,
+            }),
+          });
+          setAvatarState("idle", "Svar sendt til højttaleren");
+        } catch (error) {
+          showNotice(notices.chat, error.message);
+          setAvatarState("idle", "Klar til at lytte");
+        }
+        return;
+      }
+      if (!window.speechSynthesis || typeof SpeechSynthesisUtterance !== "function") {
+        showNotice(notices.chat, "Browseren understøtter ikke taleoutput. Vælg en Home Assistant-højttaler.");
+        setAvatarState("idle", "Klar til at lytte");
+        return;
+      }
+      stopSpeaking();
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "da-DK";
+      utterance.rate = 1;
+      const danishVoice = window.speechSynthesis.getVoices()
+        .find(voice => voice.lang.toLowerCase().startsWith("da"));
+      if (danishVoice) utterance.voice = danishVoice;
+      utterance.onstart = () => setAvatarState("speaking", "SARAH taler");
+      utterance.onend = () => setAvatarState("idle", "Klar til at lytte");
+      utterance.onerror = () => setAvatarState("idle", "Klar til at lytte");
+      window.speechSynthesis.speak(utterance);
+    }
+
+    if (SpeechRecognition) {
+      recognition = new SpeechRecognition();
+      recognition.lang = "da-DK";
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.onstart = () => {
+        recognitionStarting = false;
+        isListening = true;
+        voiceButton.disabled = false;
+        voiceButton.textContent = "Stop lytning";
+        setAvatarState("listening", "Jeg lytter…");
+        showNotice(notices.chat, "Tal nu. Tryk på “Stop lytning”, når du vil afbryde.");
+      };
+      recognition.onresult = event => {
+        const transcript = event.results?.[event.resultIndex]?.[0]?.transcript?.trim();
+        if (!transcript) {
+          showNotice(notices.chat, "Jeg hørte ikke nogen tale. Prøv igen eller skriv din besked.");
+          return;
+        }
+        const input = document.querySelector("#chat-message");
+        input.value = transcript;
+        input.form.requestSubmit();
+      };
+      recognition.onerror = event => {
+        const messages = {
+          "not-allowed": "Mikrofonadgang blev afvist. Tillad mikrofonen i browseren, eller skriv beskeden.",
+          "service-not-allowed": "Browseren tillader ikke talegenkendelse. Kontrollér browserindstillingerne, eller skriv beskeden.",
+          "no-speech": "Jeg hørte ikke nogen tale. Prøv igen.",
+          "audio-capture": "Browseren kunne ikke finde en mikrofon.",
+          "network": "Browserens talegenkendelse er ikke tilgængelig lige nu.",
+        };
+        if (event.error !== "aborted") showNotice(notices.chat, messages[event.error] || "Talegenkendelsen fejlede. Du kan stadig skrive til SARAH.");
+      };
+      recognition.onend = () => {
+        recognitionStarting = false;
+        isListening = false;
+        voiceButton.disabled = false;
+        voiceButton.textContent = "Start talelytning";
+        if (!requestInProgress && avatar.dataset.state === "listening") {
+          setAvatarState("idle", "Klar til at lytte");
+        }
+      };
+    } else {
+      voiceButton.disabled = true;
+      document.querySelector("#voice-support").textContent =
+        "Talegenkendelse understøttes ikke i denne browser. Du kan stadig få svar læst højt.";
+    }
+
+    voiceButton.addEventListener("click", () => {
+      if (!recognition) return;
+      if (isListening) {
+        recognition.stop();
+        return;
+      }
+      if (recognitionStarting) return;
+      stopSpeaking();
+      showNotice(notices.chat, "");
+      try {
+        recognitionStarting = true;
+        voiceButton.disabled = true;
+        recognition.start();
+      } catch {
+        recognitionStarting = false;
+        voiceButton.disabled = false;
+        showNotice(notices.chat, "Mikrofonen kunne ikke startes. Prøv igen eller skriv beskeden.");
+      }
+    });
+
+    voiceOutput.addEventListener("change", () => {
+      if (voiceOutput.value !== "browser") stopSpeaking();
+    });
+    function activateView(name) {
+      document.querySelectorAll(".view").forEach(section => section.classList.toggle("active", section.id === name));
+      document.querySelectorAll("nav [data-view]").forEach(button => button.classList.toggle("active", button.dataset.view === name));
+      document.querySelector("#page-title").textContent = titles[name] || titles.overview;
+      if (name === "assistant" && !window.entitiesLoaded) loadEntities();
+      if (name === "home" && !window.entitiesLoaded) loadEntities();
+      if (name === "hardware" && !window.hardwareLoaded) loadHardware();
+    }
+
+    async function loadSystemStatus() {
+      try {
+        const data = await api("/api/system/status");
+        document.querySelector("#server-state").textContent = "Online";
+        document.querySelector("#sarah-state").textContent =
+          data.ollama === "ready" ? `Klar · ${data.sarah_model}` :
+          data.ollama === "model_missing" ? `Model mangler · ${data.sarah_model}` : "Ollama utilgængelig";
+        document.querySelector("#ha-state").textContent =
+          data.home_assistant === "online" ? "Online" :
+          data.home_assistant === "not_configured" ? "Ikke konfigureret" : "Offline";
+        document.querySelector("#model-name").textContent = `Model: ${data.sarah_model}`;
+        showNotice(notices.system, data.home_assistant_error || "");
+      } catch (error) {
+        document.querySelector("#server-state").textContent = "Utilgængelig";
+        document.querySelector("#sarah-state").textContent = "Ukendt";
+        document.querySelector("#ha-state").textContent = "Ukendt";
+        showNotice(notices.system, error.message);
+      }
+    }
+
+    function addChatMessage(text, kind) {
+      const message = document.createElement("div");
+      message.className = `message ${kind}`;
+      message.textContent = text;
+      document.querySelector("#chat-log").append(message);
+      message.scrollIntoView({ block: "nearest" });
+    }
+
+    document.querySelector("#chat-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      if (requestInProgress) return;
+      const input = document.querySelector("#chat-message");
+      const button = document.querySelector("#send-chat");
+      const message = input.value.trim();
+      if (!message) return;
+      if (isListening) recognition.stop();
+      stopSpeaking();
+      requestInProgress = true;
+      addChatMessage(message, "user");
+      input.value = "";
+      button.disabled = true;
+      showNotice(notices.chat, "SARAH tænker…");
+      setAvatarState("thinking", "SARAH tænker…");
+      try {
+        const data = await api("/api/chat", {
+          method: "POST",
+          body: JSON.stringify({
+            besked: message,
+            session_id: sessionStorage.getItem("sarahSessionId"),
+          }),
+        });
+        sessionStorage.setItem("sarahSessionId", data.session_id);
+        addChatMessage(data.svar, "assistant");
+        showNotice(notices.chat, "");
+        speakReply(data.svar);
+      } catch (error) {
+        showNotice(notices.chat, error.message);
+        setAvatarState("idle", "Klar til at lytte");
+      } finally {
+        requestInProgress = false;
+        button.disabled = false;
+        input.focus();
+      }
+    });
+
+    async function loadEntities() {
+      const list = document.querySelector("#entity-list");
+      showNotice(notices.home, "Henter enheder…");
+      try {
+        const entities = await api("/api/home-assistant/entities");
+        window.homeEntities = entities;
+        window.entitiesLoaded = true;
+        updateSpeechTargets(entities);
+        renderEntities();
+        showNotice(notices.home, `${entities.length} enhed(er) indlæst.`);
+      } catch (error) {
+        list.replaceChildren();
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = error.message;
+        list.append(empty);
+        showNotice(notices.home, "");
+      }
+    }
+
+    function renderEntities() {
+      const list = document.querySelector("#entity-list");
+      const filter = document.querySelector("#entity-filter").value.trim().toLocaleLowerCase();
+      const domain = document.querySelector("#entity-domain").value;
+      const entities = (window.homeEntities || []).filter(entity =>
+        (!domain || entity.domain === domain) &&
+        `${entity.name} ${entity.entity_id}`.toLocaleLowerCase().includes(filter)
+      );
+      list.replaceChildren();
+      if (!entities.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        empty.textContent = "Ingen enheder matcher søgningen.";
+        list.append(empty);
+        return;
+      }
+      for (const entity of entities) {
+        const card = document.createElement("article");
+        card.className = "entity";
+        const info = document.createElement("div");
+        const name = document.createElement("span");
+        name.className = "entity-name";
+        name.textContent = entity.name;
+        const meta = document.createElement("span");
+        meta.className = "entity-meta";
+        meta.textContent = `${entity.entity_id} · ${entity.state}`;
+        info.append(name, meta);
+        card.append(info);
+        const supported = ["light", "switch", "fan", "input_boolean"].includes(entity.domain);
+        if (supported) {
+          const actions = document.createElement("div");
+          actions.className = "entity-actions";
+          for (const [action, label] of [["turn_on", "Tænd"], ["turn_off", "Sluk"], ["toggle", "Skift"]]) {
+            const button = document.createElement("button");
+            button.className = "secondary";
+            button.textContent = label;
+            button.addEventListener("click", () => controlEntity(entity.entity_id, action, button));
+            actions.append(button);
+          }
+          card.append(actions);
+        }
+        if (entity.domain === "media_player") {
+          const actions = document.createElement("div");
+          actions.className = "entity-actions";
+          for (const [action, label] of [
+            ["media_play_pause", "Afspil / pause"],
+            ["media_stop", "Stop"],
+            ["volume_down", "Lydstyrke −"],
+            ["volume_up", "Lydstyrke +"],
+          ]) {
+            const button = document.createElement("button");
+            button.className = "secondary";
+            button.textContent = label;
+            button.addEventListener("click", () => controlEntity(entity.entity_id, action, button));
+            actions.append(button);
+          }
+          const volume = document.createElement("input");
+          volume.type = "range";
+          volume.min = "0";
+          volume.max = "1";
+          volume.step = "0.05";
+          volume.value = String(Number.isFinite(entity.volume_level) ? entity.volume_level : 0.5);
+          volume.setAttribute("aria-label", `Lydstyrke for ${entity.name}`);
+          volume.addEventListener("change", () =>
+            controlEntity(entity.entity_id, "volume_set", volume, Number(volume.value))
+          );
+          actions.append(volume);
+          card.append(actions);
+        }
+        list.append(card);
+      }
+    }
+
+    function updateSpeechTargets(entities) {
+      const speakers = entities.filter(entity => entity.domain === "media_player");
+      const voices = entities.filter(entity => entity.domain === "tts");
+      function populate(select, options, emptyLabel, storageKey) {
+        const previous = sessionStorage.getItem(storageKey) || select.value;
+        select.replaceChildren();
+        if (!options.length) {
+          const empty = document.createElement("option");
+          empty.value = "";
+          empty.textContent = emptyLabel;
+          select.append(empty);
+          return;
+        }
+        for (const entity of options) {
+          const option = document.createElement("option");
+          option.value = entity.entity_id;
+          option.textContent = entity.name;
+          select.append(option);
+        }
+        select.value = options.some(entity => entity.entity_id === previous)
+          ? previous
+          : options[0].entity_id;
+        sessionStorage.setItem(storageKey, select.value);
+      }
+      populate(speakerSelect, speakers, "Ingen højttalere fundet", "sarahSpeaker");
+      populate(ttsSelect, voices, "Ingen TTS-motorer fundet", "sarahTts");
+    }
+
+    speakerSelect.addEventListener("change", () => sessionStorage.setItem("sarahSpeaker", speakerSelect.value));
+    ttsSelect.addEventListener("change", () => sessionStorage.setItem("sarahTts", ttsSelect.value));
+
+    async function controlEntity(entityId, action, button, volumeLevel = null) {
+      button.disabled = true;
+      showNotice(notices.home, `Udfører ${action} på ${entityId}…`);
+      try {
+        await api("/api/home-assistant/action", {
+          method: "POST",
+          body: JSON.stringify({
+            entity_id: entityId,
+            action,
+            ...(volumeLevel === null ? {} : { volume_level: volumeLevel }),
+          }),
+        });
+        showNotice(notices.home, "Handling udført.");
+        await loadEntities();
+      } catch (error) {
+        showNotice(notices.home, error.message);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    async function loadHardware() {
+      const list = document.querySelector("#hardware-list");
+      showNotice(notices.hardware, "Indlæser hardwarelager…");
+      try {
+        const query = document.querySelector("#hardware-search").value.trim();
+        const data = await api(`/api/hardware?q=${encodeURIComponent(query)}`);
+        list.replaceChildren();
+        if (!data.length) {
+          const empty = document.createElement("div");
+          empty.className = "empty";
+          empty.textContent = "Ingen hardwaredele fundet.";
+          list.append(empty);
+        }
+        for (const item of data) {
+          const card = document.createElement("article");
+          card.className = "hardware-item";
+          const heading = document.createElement("h3");
+          heading.textContent = `${item.brand} ${item.navn}`.trim() || "Unavngiven enhed";
+          const category = document.createElement("p");
+          category.textContent = `${item.kategori} · ${item.status} · antal: ${item.antal}`;
+          const details = document.createElement("p");
+          details.textContent = [item.release_year, item.specs, item.purpose, ...(item.tags || [])]
+            .filter(Boolean).join(" · ");
+          card.append(heading, category, details);
+          list.append(card);
+        }
+        window.hardwareLoaded = true;
+        showNotice(notices.hardware, `${data.length} resultat(er).`);
+      } catch (error) {
+        list.replaceChildren();
+        showNotice(notices.hardware, error.message);
+      }
+    }
+
+    document.querySelectorAll("nav [data-view]").forEach(button =>
+      button.addEventListener("click", () => activateView(button.dataset.view))
+    );
+    document.querySelectorAll("[data-open-view]").forEach(button =>
+      button.addEventListener("click", () => activateView(button.dataset.openView))
+    );
+    document.querySelector("#refresh-entities").addEventListener("click", loadEntities);
+    document.querySelector("#entity-filter").addEventListener("input", renderEntities);
+    document.querySelector("#entity-domain").addEventListener("change", renderEntities);
+    document.querySelector("#search-hardware").addEventListener("click", loadHardware);
+    document.querySelector("#hardware-search").addEventListener("keydown", event => {
+      if (event.key === "Enter") loadHardware();
+    });
+    document.querySelector("#save-token").addEventListener("click", async () => {
+      const token = tokenInput.value.trim();
+      if (token) sessionStorage.setItem("sarahApiToken", token);
+      else sessionStorage.removeItem("sarahApiToken");
+      showNotice(notices.token, "Tester adgang…");
+      try {
+        await api("/api/system/status");
+        showNotice(notices.token, "Nøgle gemt og godkendt.");
+        loadSystemStatus();
+      } catch (error) {
+        showNotice(notices.token, error.message);
+      }
+      window.entitiesLoaded = false;
+      window.hardwareLoaded = false;
+      if (document.querySelector("#home").classList.contains("active")) loadEntities();
+      if (document.querySelector("#hardware").classList.contains("active")) loadHardware();
+    });
+    loadSystemStatus();
+    setInterval(loadSystemStatus, 20000);
+  </script>
+</body>
+</html>
