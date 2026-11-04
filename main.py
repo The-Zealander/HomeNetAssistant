@@ -3,23 +3,27 @@ import ipaddress
 import os
 from pathlib import Path
 import socket
+from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent
+
+# Indlæs altid miljøvariabler fra .env ved opstart
+load_dotenv(BASE_DIR / ".env")
 
 
 def start_skrivebord(hardware_lager=False):
     os.chdir(BASE_DIR)
-    from moduler.desktop_ui import start_skrivebord as start_ui
+    from apps.desktop_ui import start_skrivebord as start_ui
 
     start_ui(hardware_lager=hardware_lager)
 
 
 def start_stemme():
     os.chdir(BASE_DIR)
-    from ai_core.SARAH import SarahV0_1, koer_stemmesamtale
+    from ai_core.SARAH import SarahV0_2, koer_stemmesamtale
     from ai_core.voice_io import LokalStemme
 
-    sarah = SarahV0_1()
+    sarah = SarahV0_2()
     koer_stemmesamtale(sarah, LokalStemme())
 
 
@@ -51,7 +55,7 @@ def start_server(host, port):
     os.chdir(BASE_DIR)
     os.environ["SARAH_HOST"] = host
     uvicorn.run(
-        "moduler.app_server:app",
+        "server.app:app",
         host=host,
         port=port,
         proxy_headers=False,
@@ -64,17 +68,22 @@ def main():
     tilstand.add_argument(
         "--desktop",
         action="store_true",
-        help="Start det grafiske dashboard i stedet for serveren.",
+        help="Start det grafiske dashboard/GUI (standard).",
+    )
+    tilstand.add_argument(
+        "--server",
+        action="store_true",
+        help="Start Uvicorn API-serveren i stedet for skrivebordet.",
     )
     tilstand.add_argument(
         "--hardware-lager",
         action="store_true",
-        help="Åbn hardwarelageret i skrivebordstilstand.",
+        help="Åbn hardwarelageret direkte i skrivebordstilstand.",
     )
     tilstand.add_argument(
         "--voice",
         action="store_true",
-        help="Start SARAHs lokale stemmesamtale i terminalen.",
+        help="Start SARAHs lokale stemmesamtale direkte i terminalen.",
     )
     parser.add_argument(
         "--host",
@@ -89,12 +98,14 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.desktop or args.hardware_lager:
-        start_skrivebord(hardware_lager=args.hardware_lager)
+    # Vælg afviklingstilstand
+    if args.server:
+        start_server(args.host, args.port)
     elif args.voice:
         start_stemme()
     else:
-        start_server(args.host, args.port)
+        # Standard: Åbn GUI / Skrivebordet direkte
+        start_skrivebord(hardware_lager=args.hardware_lager)
 
 
 if __name__ == "__main__":

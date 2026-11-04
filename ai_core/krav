@@ -1,0 +1,97 @@
+# Krav til SARAH og Lokalsystemet
+
+Dette dokument beskriver målet for den fremtidige version. Punkterne er
+ønsker og krav til udviklingen, ikke en påstand om at alt allerede virker.
+
+## Overordnet mål
+
+- Lokalsystemet skal kunne startes med én tydelig kommando eller én startfil.
+- Servertilstand skal starte webstedet og API'et samlet, så funktionerne kan
+  bruges fra en browser på computer, tablet og telefon.
+- Webstedet skal kunne åbnes, selv om valgfrie tjenester som Home Assistant
+  eller Ollama er offline. Det skal tydeligt vise, hvad der virker, mangler
+  konfiguration eller ikke kan forbindes til.
+- SARAHs tunge funktioner, eksempelvis indlæsning af en lokal AI-model, bør
+  først startes, når de behøves. Når brugeren åbner eller bruger SARAH, skal
+  systemet starte eller forbinde til det nødvendige og vise en forståelig
+  status. En allerede kørende tjeneste må ikke startes igen unødigt.
+- Webserveren skal ikke forsøge at starte Home Assistant, som er en separat
+  installation. Den skal kunne forbinde til den, når den er tilgængelig.
+- Skrivebords-GUI og stemmestyring må fortsat kunne startes separat, men må
+  ikke være nødvendige for serverens webfunktioner.
+
+## SARAH
+
+- SARAH skal kunne føre en naturlig samtale på dansk og huske konteksten
+  inden for den aktuelle samtale.
+- Brugeren skal kunne tale med SARAH fra webstedet. Stemmeinput og
+  stemmesvar er ønskede, valgfrie funktioner, især til lokal brug.
+- SARAH skal kunne gemme, vise og administrere noter og huskelister på
+  brugerens anmodning. Data skal bevares efter genstart.
+- SARAH skal kunne give tydelige svar, når en funktion eller tjeneste er
+  utilgængelig, og må ikke foregive at en handling er udført, hvis den fejlede.
+- Personlige data og samtaler skal så vidt muligt blive lokalt på serveren.
+  Eksterne tjenester må kun bruges, når det er nødvendigt og tydeligt
+  konfigureret.
+
+## Websted og adgang
+
+- Webstedet skal være det primære kontrolpanel til serverbrug og give adgang
+  til SARAH, systemstatus, Home Assistant, hardwarelager og musikarkivar.
+- Det skal være muligt at se, om SARAH, den lokale AI-model og Home Assistant
+  er tilgængelige, uden at åbne logfiler eller terminalen.
+- Web/API-adgang fra andre maskiner skal beskyttes med autentifikation og
+  HTTPS via en betroet proxy. Hemmeligheder må ikke gemmes i kildekoden.
+- Serveren skal kunne køre uden skærm og uden skrivebordsmiljø, eksempelvis
+  på en hjemmeserver. Browseren er brugerfladen; serveren udfører arbejdet.
+
+## Home Assistant og smart home
+
+- SARAH skal kunne hente og vise relevante Home Assistant-enheder og deres
+  aktuelle tilstand.
+- Brugeren skal kunne bede SARAH om at styre understøttede enheder, for
+  eksempel tænde, slukke eller skifte tilstand på lys.
+- Handlinger skal begrænses til kendte enheder og understøttede kommandoer.
+  Ukendte eller risikable handlinger må ikke udføres ud fra et gæt.
+- Fejl eller manglende forbindelse til Home Assistant skal vises tydeligt,
+  og påvirke ikke resten af webstedet.
+
+## Musikarkivar
+
+- Musikarkivaren skal kunne bruges fra browseren og tage imod flere links i
+  en kø, så brugeren ikke behøver vente på hver enkelt download.
+- Køen skal behandle én opgave ad gangen, vise status og fejl og kunne sættes
+  på pause eller genoptages.
+- Playlister og album/EP'er skal bevares i korrekt rækkefølge og gemmes under
+  `Musik/Album/Nummer - Sang` eller, for singler uden et album,
+  `Musik/Sang`.
+- Kunstner, sangtitel, album, nummerorden og cover skal kontrolleres så godt
+  som muligt. Systemet skal hellere bruge længere tid på opslag og
+  kontrol end gemme forkerte eller ufuldstændige filer.
+- En download må ikke overskrive en anden sang på grund af ens filnavne.
+  Gentagne downloads af samme sang skal kunne genkendes, og fejl skal kunne
+  prøves igen uden at ødelægge allerede hentede filer.
+- Musik og kødata skal gemmes i mapper, der kan overleve genstart og
+  containeropdateringer.
+
+## Hardwarelager og programmer
+
+- Hardwarelageret skal kunne ses og søges fra webstedet. Ændringer skal først
+  understøttes, når de kan gemmes sikkert og med tydelig feedback.
+- SARAH må gerne kunne åbne projektets kendte programmer, når det giver
+  mening. I servertilstand skal hun i stedet linke til webfunktioner; hun må
+  ikke forsøge at åbne et grafisk vindue på en server uden skærm.
+
+## Sikkerhed, drift og prioritering
+
+- SARAH må ikke udføre vilkårlige terminalkommandoer, ændre serverfiler eller
+  styre ukendte tjenester alene på baggrund af fri tekst.
+- Handlinger med væsentlige konsekvenser skal kræve brugerens tydelige
+  bekræftelse.
+- Fejl skal logges uden at lække adgangskoder, API-nøgler eller andre
+  hemmeligheder.
+- Serveren skal kunne genstartes uden at miste noter, musikfiler eller andre
+  data, der er markeret som permanente.
+- Første prioritet er en stabil enkeltstart, et tilgængeligt websted, tydelig
+  tjenestestatus og fungerende SARAH-chat. Derefter forbedres Home Assistant,
+  persistent kø, musikarkivering, stemme og øvrige integrationer gradvist.
