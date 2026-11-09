@@ -1,3 +1,5 @@
+"""Legacy Home Assistant tests kept for reference outside default discovery."""
+
 import unittest
 from unittest.mock import Mock, patch
 

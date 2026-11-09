@@ -1,3 +1,5 @@
+"""Present the local hardware inventory in a searchable desktop window."""
+
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 

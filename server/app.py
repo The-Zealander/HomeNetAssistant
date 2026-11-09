@@ -1,3 +1,5 @@
+"""Expose SARAH, Home Assistant, hardware, and music features through HTTP routes."""
+
 import hmac
 import logging
 import os
@@ -11,8 +13,8 @@ from pathlib import Path
 
 import httpx
 import ollama
-from fastapi import FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from mutagen import MutagenError
@@ -20,8 +22,15 @@ from mutagen.id3 import ID3
 from mutagen.mp3 import HeaderNotFoundError, MP3
 
 from ai_core.SARAH import SarahV0_1
+from ai_core.voice_io import LokalStemme
 from apps.hardware_inventory.storage import DATA_FIL, HardwareLagerDB
-from apps.music_archiver.queue import MusicQueue
+from apps.music_archiver.library_restore import (
+    audit_album_integrity,
+    parse_recovery_document,
+    restore_library,
+)
+from apps.music_archiver.music_assistant import MusicAssistant, MusicSourceDiscovery
+from apps.music_archiver.queue import MusicQueue, MusicQueueBusyError
 from integrations.home_assistant.client import HomeAssistantAPI
 
 
@@ -37,8 +46,13 @@ class ChatRequest(BaseModel):
     session_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
+class VoiceSynthesisRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=2000)
+
+
 class MusicQueueRequest(BaseModel):
     urls: list[str]
+    download_video: bool = False
 
 
 class HomeAssistantActionRequest(BaseModel):
@@ -62,6 +76,17 @@ class SarahServer:
             self.home_assistant = None
             logger.warning("Home Assistant er ikke konfigureret: %s", error)
         self.music_queue = MusicQueue()
+        self.music_assistant = MusicAssistant()
+        discovery_state_path = Path(
+            os.environ.get(
+                "MUSIC_ASSISTANT_STATE_PATH",
+                Path(__file__).resolve().parents[1]
+                / "data"
+                / "music_assistant"
+                / "discovery.json",
+            )
+        )
+        self.music_discovery = MusicSourceDiscovery(discovery_state_path)
         self.sessioner = OrderedDict()
         self.lock = threading.RLock()
 
@@ -306,6 +331,7 @@ def hardware_inventory(q: str = "", authorization: str | None = Header(default=N
 
 def _music_library_summary():
     music_dir = Path(os.environ.get("MUSIC_DOWNLOAD_PATH", str(Path.home() / "Musik")))
+    recovery_document = music_dir / "_samlet_arkiv.txt"
     total_files = 0
     corrupt_files = 0
     missing_covers = 0
@@ -318,6 +344,11 @@ def _music_library_summary():
             "missing_covers": 0,
             "missing_album_artists": 0,
             "duplicate_groups": 0,
+            "recovery_document_found": recovery_document.is_file(),
+            "saved_track_links": 0,
+            "album_tracks_checked": 0,
+            "album_tracks_missing": 0,
+            "album_tracks_needing_repair": 0,
         }
 
     for root, _, filenames in os.walk(music_dir):
@@ -337,15 +368,43 @@ def _music_library_summary():
                 artist = str(tags.get("TPE1", "")).casefold().strip() if tags else ""
                 title = str(tags.get("TIT2", "")).casefold().strip() if tags else ""
                 if artist and title:
-                    track_paths.setdefault((artist, title), []).append(file_path)
+                    track_paths.setdefault(
+                        (artist, title, round(float(audio.info.length or 0))),
+                        [],
+                    ).append(file_path)
             except (HeaderNotFoundError, MutagenError, OSError, ValueError):
                 corrupt_files += 1
+    try:
+        saved_track_links = len(parse_recovery_document(recovery_document)) if recovery_document.is_file() else 0
+    except (OSError, UnicodeError):
+        logger.exception("Kunne ikke læse musikbibliotekets arkivlog.")
+        saved_track_links = 0
+    try:
+        album_health = (
+            audit_album_integrity(music_dir)
+            if recovery_document.is_file()
+            else {
+                "album_tracks_checked": 0,
+                "album_tracks_missing": 0,
+                "album_tracks_needing_repair": 0,
+            }
+        )
+    except (OSError, UnicodeError):
+        logger.exception("Kunne ikke kontrollere albumplaceringer i musikbiblioteket.")
+        album_health = {
+            "album_tracks_checked": 0,
+            "album_tracks_missing": 0,
+            "album_tracks_needing_repair": 0,
+        }
     return {
         "total_files": total_files,
         "corrupt_files": corrupt_files,
         "missing_covers": missing_covers,
         "missing_album_artists": missing_album_artists,
         "duplicate_groups": sum(len(paths) > 1 for paths in track_paths.values()),
+        "recovery_document_found": recovery_document.is_file(),
+        "saved_track_links": saved_track_links,
+        **album_health,
     }
 
 
@@ -362,7 +421,10 @@ def add_music_queue_items(
 ):
     _check_token(authorization)
     try:
-        added = _runtime().music_queue.add(request.urls)
+        added = _runtime().music_queue.add(
+            request.urls,
+            download_video=request.download_video,
+        )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return {"added": added, **_runtime().music_queue.snapshot()}
@@ -402,6 +464,119 @@ def remove_music_queue_item(job_id: str, authorization: str | None = Header(defa
 def music_library_health(authorization: str | None = Header(default=None)):
     _check_token(authorization)
     return _music_library_summary()
+
+
+@app.get("/api/music/assistant")
+def music_assistant(
+    q: str = Query(default="", max_length=200),
+    limit: int = Query(default=10, ge=1, le=25),
+    refresh: bool = False,
+    authorization: str | None = Header(default=None),
+):
+    _check_token(authorization)
+    music_dir = Path(os.environ.get("MUSIC_DOWNLOAD_PATH", str(Path.home() / "Musik")))
+    try:
+        return _runtime().music_assistant.analyze(
+            music_dir,
+            query=q,
+            limit=limit,
+            refresh=refresh,
+        )
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except OSError as error:
+        logger.exception("Den lokale Music Assistant kunne ikke læse biblioteket.")
+        raise HTTPException(
+            status_code=503,
+            detail="Musikbiblioteket kunne ikke analyseres.",
+        ) from error
+
+
+@app.get("/api/music/assistant/discovery")
+def music_source_discovery_status(
+    authorization: str | None = Header(default=None),
+):
+    _check_token(authorization)
+    return _runtime().music_discovery.snapshot()
+
+
+@app.post("/api/music/assistant/discovery/start")
+def start_music_source_discovery(
+    authorization: str | None = Header(default=None),
+):
+    _check_token(authorization)
+    music_dir = Path(os.environ.get("MUSIC_DOWNLOAD_PATH", str(Path.home() / "Musik")))
+    try:
+        return _runtime().music_discovery.start(music_dir, refresh=True)
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except OSError as error:
+        logger.exception("Kildesøgningen kunne ikke gemme sin status.")
+        raise HTTPException(
+            status_code=500,
+            detail="Kildesøgningen kunne ikke starte på grund af en filsystemfejl.",
+        ) from error
+
+
+@app.post("/api/music/assistant/discovery/pause")
+def pause_music_source_discovery(
+    authorization: str | None = Header(default=None),
+):
+    _check_token(authorization)
+    return _runtime().music_discovery.pause()
+
+
+@app.post("/api/music/assistant/discovery/resume")
+def resume_music_source_discovery(
+    authorization: str | None = Header(default=None),
+):
+    _check_token(authorization)
+    try:
+        return _runtime().music_discovery.resume()
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/api/music/assistant/discovery/queue-high-confidence")
+def queue_music_source_matches(
+    authorization: str | None = Header(default=None),
+):
+    _check_token(authorization)
+    runtime = _runtime()
+    try:
+        return runtime.music_discovery.queue_high_confidence(runtime.music_queue)
+    except RuntimeError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+
+@app.post("/api/music/library/restore")
+def restore_music_library(authorization: str | None = Header(default=None)):
+    _check_token(authorization)
+    music_dir = Path(os.environ.get("MUSIC_DOWNLOAD_PATH", str(Path.home() / "Musik")))
+    queue = _runtime().music_queue
+    try:
+        with queue.maintenance():
+            return restore_library(str(music_dir), queue)
+    except MusicQueueBusyError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except OSError as error:
+        logger.exception("Musikbiblioteket kunne ikke gendannes.")
+        raise HTTPException(
+            status_code=500,
+            detail="Musikbiblioteket kunne ikke gendannes på grund af en filsystemfejl.",
+        ) from error
 
 
 def _status(runtime):
@@ -486,3 +661,19 @@ def chat(request: ChatRequest, authorization: str | None = Header(default=None))
             detail="Ollama kunne ikke kontaktes. Kontrollér Ollama-tjenesten.",
         ) from fejl
     return {"session_id": session_id, "svar": svar}
+
+
+@app.post("/api/voice/speak")
+def voice_speak(
+    request: VoiceSynthesisRequest,
+    authorization: str | None = Header(default=None),
+):
+    _check_token(authorization)
+    message = request.message.strip()
+    if not message:
+        raise HTTPException(status_code=422, detail="Beskeden må ikke være tom.")
+    try:
+        audio = LokalStemme.generer_lyd(message)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return Response(content=audio, media_type="audio/wav", headers={"Cache-Control": "no-store"})

@@ -1,3 +1,5 @@
+"""Legacy server tests kept for reference outside the default test discovery."""
+
 import os
 import unittest
 from pathlib import Path

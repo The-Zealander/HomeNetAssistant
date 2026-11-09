@@ -1,3 +1,5 @@
+"""Select and launch Lokalsystemet's desktop, voice, or headless server mode."""
+
 import argparse
 import ipaddress
 import os

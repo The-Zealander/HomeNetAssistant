@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- Main browser dashboard for SARAH, Home Assistant, and hardware inventory. -->
 <html lang="da">
 <head>
   <meta charset="utf-8">
@@ -240,6 +241,7 @@
             <button id="voice-input" class="secondary" type="button">Start talelytning</button>
             <label for="voice-output">Afspil SARAHs svar
               <select id="voice-output">
+                <option value="local">SARAH (lokal dansk stemme)</option>
                 <option value="browser">På denne enhed (browser)</option>
                 <option value="home-assistant">På Home Assistant-højttaler</option>
                 <option value="off">Ingen lyd</option>
@@ -254,7 +256,10 @@
             <span id="voice-support" class="muted"></span>
           </div>
           <p class="muted">Højttaleroutput bruger Home Assistants TTS-integration. Vælg en lokal motor som Piper for at holde tale lokalt.</p>
-          <div id="chat-log" class="chat-log" aria-live="polite"></div>
+          <div id="chat-log" class="chat-log" role="log" aria-label="Samtale med SARAH" aria-live="polite" aria-relevant="additions"></div>
+          <div class="toolbar">
+            <button id="new-chat" class="secondary" type="button">Ny samtale</button>
+          </div>
           <form id="chat-form" class="chat-form">
             <label for="chat-message">Besked
               <input id="chat-message" maxlength="2000" required placeholder="Skriv til SARAH…">
@@ -329,17 +334,21 @@
     const ttsSelect = document.querySelector("#response-tts");
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     let recognition = null;
+    let audioPlayback = null;
     let isListening = false;
     let recognitionStarting = false;
     let requestInProgress = false;
     tokenInput.value = sessionStorage.getItem("sarahApiToken") || "";
+    voiceOutput.value = sessionStorage.getItem("sarahVoiceOutput") || "local";
 
     async function api(path, options = {}) {
       const headers = { ...(options.headers || {}) };
       if (tokenInput.value.trim()) headers.Authorization = `Bearer ${tokenInput.value.trim()}`;
       if (options.body) headers["Content-Type"] = "application/json";
       const response = await fetch(path, { ...options, headers });
-      const data = await response.json().catch(() => ({}));
+      const data = response.ok && response.headers.get("content-type")?.startsWith("audio/")
+        ? await response.blob()
+        : await response.json().catch(() => ({}));
       if (!response.ok) {
         if (response.status === 401) {
           sessionStorage.removeItem("sarahApiToken");
@@ -359,11 +368,57 @@
 
     function stopSpeaking() {
       if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+      if (audioPlayback) {
+        audioPlayback.audio.pause();
+        audioPlayback.audio.currentTime = 0;
+        URL.revokeObjectURL(audioPlayback.url);
+        audioPlayback = null;
+      }
+    }
+
+    async function speakLocally(text) {
+      const audioBlob = await api("/api/voice/speak", {
+        method: "POST",
+        body: JSON.stringify({ message: text }),
+      });
+      const url = URL.createObjectURL(audioBlob);
+      const audio = new Audio(url);
+      const playback = { audio, url };
+      audioPlayback = playback;
+      await new Promise((resolve, reject) => {
+        const cleanup = () => {
+          URL.revokeObjectURL(url);
+          if (audioPlayback === playback) audioPlayback = null;
+        };
+        audio.onended = () => {
+          cleanup();
+          resolve();
+        };
+        audio.onerror = () => {
+          cleanup();
+          reject(new Error("SARAHs lokale lyd kunne ikke afspilles. Kontrollér enhedens lyd."));
+        };
+        audio.play().catch(error => {
+          cleanup();
+          reject(new Error(`SARAHs lokale lyd kunne ikke startes: ${error.message}`));
+        });
+      });
     }
 
     async function speakReply(text) {
       if (voiceOutput.value === "off") {
         setAvatarState("idle", "Klar til at lytte");
+        return;
+      }
+      if (voiceOutput.value === "local") {
+        setAvatarState("speaking", "SARAH laver lokal dansk tale…");
+        try {
+          await speakLocally(text);
+          setAvatarState("idle", "Klar til at lytte");
+        } catch (error) {
+          showNotice(notices.chat, error.message);
+          setAvatarState("idle", "Klar til at lytte");
+        }
         return;
       }
       if (voiceOutput.value === "home-assistant") {
@@ -478,6 +533,7 @@
     });
 
     voiceOutput.addEventListener("change", () => {
+      sessionStorage.setItem("sarahVoiceOutput", voiceOutput.value);
       if (voiceOutput.value !== "browser") stopSpeaking();
     });
     function activateView(name) {
@@ -513,9 +569,59 @@
       const message = document.createElement("div");
       message.className = `message ${kind}`;
       message.textContent = text;
-      document.querySelector("#chat-log").append(message);
+      const log = document.querySelector("#chat-log");
+      log.append(message);
+      while (log.children.length > 80) log.firstElementChild.remove();
       message.scrollIntoView({ block: "nearest" });
+      const history = [...log.querySelectorAll(".message")].map(item => ({
+        text: item.textContent,
+        kind: item.classList.contains("user") ? "user" : "assistant",
+      }));
+      try {
+        sessionStorage.setItem("sarahChatHistory", JSON.stringify(history));
+      } catch {
+        showNotice(notices.chat, "Samtalen kan ikke gemmes i browseren, men chatten virker stadig.");
+      }
     }
+
+    function restoreChatHistory() {
+      let history;
+      try {
+        history = JSON.parse(sessionStorage.getItem("sarahChatHistory") || "[]");
+      } catch {
+        sessionStorage.removeItem("sarahChatHistory");
+        return;
+      }
+      if (!Array.isArray(history)) {
+        sessionStorage.removeItem("sarahChatHistory");
+        return;
+      }
+      for (const item of history.slice(-80)) {
+        if (item && typeof item.text === "string" && ["user", "assistant"].includes(item.kind)) {
+          const message = document.createElement("div");
+          message.className = `message ${item.kind}`;
+          message.textContent = item.text;
+          document.querySelector("#chat-log").append(message);
+        }
+      }
+      document.querySelector("#chat-log").lastElementChild?.scrollIntoView({ block: "nearest" });
+    }
+
+    restoreChatHistory();
+    document.querySelector("#new-chat").addEventListener("click", () => {
+      if (requestInProgress) {
+        showNotice(notices.chat, "Vent på SARAHs svar, før du starter en ny samtale.");
+        return;
+      }
+      if (recognitionStarting || isListening) recognition.abort();
+      stopSpeaking();
+      sessionStorage.removeItem("sarahSessionId");
+      sessionStorage.removeItem("sarahChatHistory");
+      document.querySelector("#chat-log").replaceChildren();
+      showNotice(notices.chat, "Ny samtale startet.");
+      setAvatarState("idle", "Klar til at lytte");
+      document.querySelector("#chat-message").focus();
+    });
 
     document.querySelector("#chat-form").addEventListener("submit", async event => {
       event.preventDefault();

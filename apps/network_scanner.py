@@ -1,4 +1,4 @@
-"""Placeholder for a future, explicitly configured network inventory feature."""
+"""Document the unimplemented network-inventory placeholder without scanning."""
 
 
 def scan_network():

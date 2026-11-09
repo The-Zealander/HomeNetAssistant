@@ -1,3 +1,5 @@
+"""Connect to Home Assistant and expose the supported entity and service actions."""
+
 import os
 import requests
 from dotenv import load_dotenv

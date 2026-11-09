@@ -1,3 +1,5 @@
+"""Start and track the desktop applications exposed by the dashboard."""
+
 import os
 import subprocess
 import sys

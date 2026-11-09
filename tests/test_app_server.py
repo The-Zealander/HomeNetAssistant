@@ -1,3 +1,5 @@
+"""Verify server runtime initialization and status when Home Assistant is absent."""
+
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch

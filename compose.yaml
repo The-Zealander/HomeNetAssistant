@@ -24,6 +24,9 @@ services:
       SARAH_PORT: 8000
       SARAH_API_TOKEN: ${SARAH_API_TOKEN:?Set SARAH_API_TOKEN in .env}
       MUSIC_DOWNLOAD_PATH: /app/data/music
+      MUSIC_VIDEO_DOWNLOAD_PATH: /app/data/music-videos
+      MUSIC_ASSISTANT_STATE_PATH: /app/data/music-assistant/discovery.json
+      MUSIC_YTDLP_COOKIES_BROWSER: ${MUSIC_YTDLP_COOKIES_BROWSER:-auto}
       HA_URL: ${HA_URL:-}
       HA_TOKEN: ${HA_TOKEN:-}
     ports:

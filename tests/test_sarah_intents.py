@@ -1,3 +1,5 @@
+"""Check SARAH's supported Home Assistant intent handling and failures."""
+
 import unittest
 from unittest.mock import Mock, patch
 

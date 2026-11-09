@@ -1,3 +1,5 @@
+"""Implement SARAH's local conversation logic, memory, and assistant actions."""
+
 from datetime import datetime
 import json
 import os

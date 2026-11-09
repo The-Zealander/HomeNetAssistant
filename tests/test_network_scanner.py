@@ -1,3 +1,5 @@
+"""Confirm the network-scanner placeholder reports that scanning is unavailable."""
+
 import unittest
 
 from apps.network_scanner import scan_network

@@ -1,3 +1,5 @@
+"""Check that SARAH's personal notes persist locally and obey input limits."""
+
 import json
 import tempfile
 import unittest

@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- Browser interface for the music download queue and library recovery tools. -->
 <html lang="da">
 <head>
   <meta charset="utf-8">
@@ -15,6 +16,8 @@
     section { background: #19222d; border: 1px solid #2a3949; border-radius: 12px; padding: 18px; margin: 14px 0; }
     label { display: block; color: #c1ccd8; margin-bottom: 7px; }
     input, textarea { width: 100%; border: 1px solid #3a4a5d; border-radius: 7px; padding: 10px 12px; background: #101720; color: #fff; font: inherit; }
+    input[type="checkbox"] { width: auto; margin: 0 7px 0 0; }
+    label.option { display: flex; align-items: flex-start; gap: 2px; margin-top: 12px; }
     textarea { min-height: 100px; resize: vertical; }
     button { border: 0; border-radius: 7px; padding: 9px 13px; color: white; background: #2869b2; font: inherit; cursor: pointer; }
     button.secondary { background: #354252; }
@@ -33,6 +36,11 @@
     #logs { max-height: 220px; overflow: auto; white-space: pre-wrap; font: 13px ui-monospace, monospace; color: #cbd5e1; }
     #notice { min-height: 1.4em; color: #ffcc80; }
     .muted { color: #9eafc2; font-size: .9rem; }
+    .assistant-results { display: grid; gap: 8px; margin-top: 12px; }
+    .assistant-track { border: 1px solid #2a3949; border-radius: 8px; padding: 10px 12px; }
+    .assistant-track strong { display: block; }
+    .candidate { margin-top: 7px; padding: 8px; background: #101720; border-radius: 6px; overflow-wrap: anywhere; }
+    .candidate a { color: #9dc7ff; }
     @media (max-width: 640px) { header { align-items: start; flex-direction: column; } .token { margin-left: 0; } }
   </style>
 </head>
@@ -50,13 +58,46 @@
 
   <section>
     <h2>Tilføj til downloadkø</h2>
-    <label for="urls">Ét YouTube- eller YouTube Music-link pr. linje</label>
+    <label for="urls">Ét musiklink pr. linje</label>
     <textarea id="urls" placeholder="https://music.youtube.com/playlist?list=…"></textarea>
+    <p id="link-hint" class="muted" role="status">YouTube og YouTube Music kan sættes i downloadkøen. Spotify- og Tidal-links genkendes, men denne henter bruger dem ikke som lydkilder.</p>
+    <label class="option" for="download-video">
+      <input id="download-video" type="checkbox">
+      <span>Prøv også at hente musikvideoen separat, hvis kilden har en MP4-version, som kan hentes. Vælg kun dette for indhold, du har ret til at gemme.</span>
+    </label>
+    <p class="muted">Videoer gemmes som MP4 i en separat mappe uden for Navidromes musikbibliotek. De er ikke garanteret at kunne vises i Navidrome eller Symfonium.</p>
     <div class="toolbar">
       <button id="add">Tilføj og start kø</button>
       <span class="muted">Køen fortsætter på serveren, selvom browseren lukkes.</span>
       <span id="notice" role="status"></span>
     </div>
+  </section>
+
+  <section>
+    <h2>Music Assistant · lokal musikopdagelse</h2>
+    <p class="muted">Søg efter artist, titel, album eller genre. Den lette lokale anbefalingsmotor bruger kun tags fra dit bibliotek; den kræver hverken model, konto eller netadgang.</p>
+    <label for="assistant-query">Hvad vil du høre mere af?</label>
+    <input id="assistant-query" type="search" maxlength="200" placeholder="Fx artist, sang, album eller genre">
+    <div class="toolbar">
+      <button id="assistant-search" type="button">Find musik</button>
+      <button id="assistant-analyze" class="secondary" type="button">Analyser bibliotek</button>
+    </div>
+    <div id="assistant-summary" class="muted" role="status"></div>
+    <div id="assistant-message" class="muted" role="status"></div>
+    <div id="assistant-results" class="assistant-results"></div>
+  </section>
+
+  <section>
+    <h2>Find manglende kilder</h2>
+    <p class="muted">Søger YouTube efter sporene i biblioteket, gemmer løbende status og kan fortsætte efter genstart. Kun tydelige titel-, kunstner- og varighedsmatch markeres som høj sikkerhed. Søgninger sender titel/kunstner til YouTube. Intet ændres i biblioteket automatisk.</p>
+    <div class="toolbar">
+      <button id="discovery-start">Undersøg hele biblioteket</button>
+      <button id="discovery-pause" class="secondary">Sæt på pause</button>
+      <button id="discovery-resume" class="secondary">Fortsæt undersøgelse</button>
+      <button id="discovery-queue" class="secondary">Sæt sikre match i downloadkøen</button>
+    </div>
+    <div id="discovery-status" class="muted" role="status">Ingen kildeundersøgelse endnu.</div>
+    <div id="discovery-results" class="assistant-results"></div>
   </section>
 
   <section>
@@ -66,7 +107,10 @@
       <button id="resume" class="secondary">Fortsæt kø</button>
       <button id="clear" class="danger">Ryd afsluttede</button>
       <button id="audit" class="secondary">Tjek bibliotek</button>
+      <button id="restore" disabled>Kontrollér og reparér hele arkivet</button>
     </div>
+    <p class="muted">Gendannelse gennemgår hvert spor i _samlet_arkiv.txt, retter tags og placering på eksisterende filer uden at hente dem igen, og sætter kun manglende spor i downloadkøen. Dårlige dubletter og beskadigede filer flyttes til .restore-quarantine i stedet for at blive slettet permanent.</p>
+    <div id="library-report" class="muted" role="status"></div>
     <div class="table-wrap">
       <table>
         <thead><tr><th>Status</th><th>Link</th><th>Detalje</th><th></th></tr></thead>
@@ -86,6 +130,16 @@
     const jobsBody = document.querySelector("#jobs");
     const logsBox = document.querySelector("#logs");
     const notice = document.querySelector("#notice");
+    const linkHint = document.querySelector("#link-hint");
+    const assistantQuery = document.querySelector("#assistant-query");
+    const assistantSummary = document.querySelector("#assistant-summary");
+    const assistantMessage = document.querySelector("#assistant-message");
+    const assistantResults = document.querySelector("#assistant-results");
+    const discoveryStatus = document.querySelector("#discovery-status");
+    const discoveryResults = document.querySelector("#discovery-results");
+    let discoveryHighConfidence = 0;
+    const restoreButton = document.querySelector("#restore");
+    let hasRecoveryDocument = false;
     tokenInput.value = sessionStorage.getItem("sarahApiToken") || "";
 
     async function api(path, options = {}) {
@@ -105,6 +159,36 @@
     }
 
     function setNotice(text) { notice.textContent = text; }
+    function classifyLink(value) {
+      try {
+        const parsed = new URL(value);
+        if (parsed.protocol !== "https:") return "unsupported";
+        const host = parsed.hostname.toLowerCase();
+        const isDomain = domain => host === domain || host.endsWith(`.${domain}`);
+        if (isDomain("music.youtube.com")) return "YouTube Music";
+        if (isDomain("youtube.com") || isDomain("youtu.be")) return "YouTube";
+        if (isDomain("spotify.com") || isDomain("spotify.link")) return "Spotify";
+        if (isDomain("tidal.com") || isDomain("tidal.link")) return "Tidal";
+        return "ukendt tjeneste";
+      } catch {
+        return "ugyldigt link";
+      }
+    }
+    function updateLinkHint() {
+      const links = urlsInput.value.split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+      if (!links.length) {
+        linkHint.textContent = "YouTube og YouTube Music kan sættes i downloadkøen. Spotify- og Tidal-links genkendes, men denne henter bruger dem ikke som lydkilder.";
+        return;
+      }
+      const providers = [...new Set(links.map(classifyLink))];
+      const unsupported = providers.filter(provider =>
+        provider === "Spotify" || provider === "Tidal" ||
+        provider === "ukendt tjeneste" || provider === "ugyldigt link"
+      );
+      linkHint.textContent = unsupported.length
+        ? `Genkendte kilder: ${providers.join(", ")}. Kun YouTube/YouTube Music kan hentes her; Spotify og Tidal leverer ikke lyd til denne kø.`
+        : `Genkendte kilder: ${providers.join(", ")}. Links sættes i downloadkøen.`;
+    }
     function render(state) {
       const jobs = state.jobs || [];
       jobsBody.replaceChildren();
@@ -126,7 +210,7 @@
         url.className = "url";
         url.textContent = job.url;
         const detail = row.insertCell();
-        detail.textContent = job.message || "";
+        detail.textContent = `${job.message || ""} · ${job.provider || "ukendt kilde"}${job.download_video ? " · musikvideo ønsket" : ""}`;
         const actions = row.insertCell();
         if (job.status === "queued") {
           const remove = document.createElement("button");
@@ -158,6 +242,161 @@
       }
     }
 
+    async function runMusicAssistant(refreshLibrary = false) {
+      assistantMessage.textContent = "Analyserer lokale musiktags…";
+      assistantResults.replaceChildren();
+      try {
+        const params = new URLSearchParams({ q: assistantQuery.value.trim(), limit: "10" });
+        if (refreshLibrary) params.set("refresh", "true");
+        const result = await api(`/api/music/assistant?${params}`);
+        const summary = result.summary;
+        assistantSummary.textContent =
+          `${summary.tracks_analyzed} spor · ${summary.unique_artists} kunstnere · ` +
+          `${summary.unique_genres} genrer · mangler cover: ${summary.missing_covers} · ` +
+          `mangler genre: ${summary.missing_genres} · ulæselige filer: ${summary.unreadable_files}`;
+        assistantMessage.textContent = result.message;
+        for (const track of result.recommendations) {
+          const item = document.createElement("article");
+          item.className = "assistant-track";
+          const title = document.createElement("strong");
+          title.textContent = `${track.title} — ${track.artists.join(", ") || "Ukendt kunstner"}`;
+          item.append(title);
+          const details = document.createElement("span");
+          const values = [track.album, track.genres.join(", "), track.date]
+            .filter(Boolean);
+          details.textContent = `${values.join(" · ")}${track.matched_fields.length
+            ? ` · match på ${track.matched_fields.join(", ")}`
+            : ""}`;
+          item.append(details);
+          assistantResults.append(item);
+        }
+      } catch (error) {
+        assistantMessage.textContent = error.message;
+        assistantSummary.textContent = "";
+      }
+    }
+
+    async function refreshDiscovery() {
+      try {
+        const state = await api("/api/music/assistant/discovery");
+        if (state.status === "idle") {
+          discoveryHighConfidence = 0;
+          discoveryStatus.textContent = "Ingen kildeundersøgelse endnu.";
+          document.querySelector("#discovery-start").disabled = false;
+          document.querySelector("#discovery-pause").disabled = true;
+          document.querySelector("#discovery-resume").disabled = true;
+          document.querySelector("#discovery-queue").disabled = true;
+          return;
+        }
+        discoveryStatus.textContent =
+          `${state.status} · ${state.processed}/${state.total} spor undersøgt · ` +
+          `${state.high_confidence} sikre · ${state.medium_confidence} mulige · ` +
+          `${state.low_confidence} usikre · ${state.queued} sat i kø. ` +
+          "Resultater vises for de seneste 200 fund.";
+        discoveryHighConfidence = state.high_confidence;
+        discoveryResults.replaceChildren();
+        for (const item of state.items || []) {
+          const article = document.createElement("article");
+          article.className = "assistant-track";
+          const title = document.createElement("strong");
+          title.textContent =
+            `${item.track.title} — ${item.track.artists.join(", ") || "Ukendt kunstner"}`;
+          article.append(title);
+          if (item.error) {
+            const error = document.createElement("div");
+            error.textContent = `Søgning fejlede: ${item.error}`;
+            article.append(error);
+          }
+          for (const candidate of item.candidates || []) {
+            const result = document.createElement("div");
+            result.className = "candidate";
+            const link = document.createElement("a");
+            link.href = candidate.url;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            link.textContent =
+              `${candidate.title} — ${candidate.artist || "Ukendt kunstner"}`;
+            result.append(link);
+            const confidence = document.createElement("span");
+            confidence.textContent =
+              ` · ${candidate.confidence} sikkerhed · score ${candidate.score}` +
+              ` · varighed ${candidate.duration_seconds || "ukendt"} sek.`;
+            result.append(confidence);
+            article.append(result);
+          }
+          discoveryResults.append(article);
+        }
+        document.querySelector("#discovery-pause").disabled =
+          state.status !== "running";
+        document.querySelector("#discovery-start").disabled =
+          ["running", "pausing", "paused"].includes(state.status);
+        document.querySelector("#discovery-resume").disabled =
+          !["paused", "completed"].includes(state.status) ||
+          state.pending + state.errors === 0;
+        document.querySelector("#discovery-queue").disabled =
+          state.status === "running" || state.status === "pausing" ||
+          state.high_confidence === 0;
+      } catch (error) {
+        discoveryStatus.textContent = error.message;
+      }
+    }
+
+    document.querySelector("#discovery-start").addEventListener("click", async () => {
+      if (!window.confirm(
+        "Undersøg alle MP3-spor ved at sende titel og kunstner til YouTube-søgning? Søgningen ændrer ikke dine filer."
+      )) return;
+      discoveryStatus.textContent = "Starter kildeundersøgelse…";
+      try {
+        await api("/api/music/assistant/discovery/start", { method: "POST" });
+        await refreshDiscovery();
+      } catch (error) {
+        discoveryStatus.textContent = error.message;
+      }
+    });
+    document.querySelector("#discovery-pause").addEventListener("click", async () => {
+      try {
+        await api("/api/music/assistant/discovery/pause", { method: "POST" });
+        await refreshDiscovery();
+      } catch (error) {
+        discoveryStatus.textContent = error.message;
+      }
+    });
+    document.querySelector("#discovery-resume").addEventListener("click", async () => {
+      try {
+        await api("/api/music/assistant/discovery/resume", { method: "POST" });
+        await refreshDiscovery();
+      } catch (error) {
+        discoveryStatus.textContent = error.message;
+      }
+    });
+    document.querySelector("#discovery-queue").addEventListener("click", async () => {
+      if (!window.confirm(
+        `Sæt op til ${discoveryHighConfidence} høj-sikkerhed YouTube-match i downloadkøen? Brug kun indhold, du har ret til at hente. Downloaden kan erstatte filer med samme titel.`
+      )) return;
+      try {
+        const result = await api(
+          "/api/music/assistant/discovery/queue-high-confidence",
+          { method: "POST" },
+        );
+        discoveryStatus.textContent =
+          `${result.queued} sikre match sat i kø. Downloadene kan overvåges nedenfor.`;
+        await refresh();
+        await refreshDiscovery();
+      } catch (error) {
+        discoveryStatus.textContent = error.message;
+      }
+    });
+
+    document.querySelector("#assistant-search").addEventListener("click", () => {
+      runMusicAssistant();
+    });
+    document.querySelector("#assistant-analyze").addEventListener("click", () => {
+      runMusicAssistant(true);
+    });
+    assistantQuery.addEventListener("keydown", event => {
+      if (event.key === "Enter") runMusicAssistant();
+    });
+
     document.querySelector("#save-token").addEventListener("click", async () => {
       const token = tokenInput.value.trim();
       if (token) sessionStorage.setItem("sarahApiToken", token);
@@ -167,15 +406,21 @@
         await api("/api/music/queue");
         setNotice("Nøgle gemt og godkendt.");
         await refresh();
+        document.querySelector("#audit").click();
       } catch (error) { setNotice(error.message); }
     });
+    urlsInput.addEventListener("input", updateLinkHint);
     document.querySelector("#add").addEventListener("click", async () => {
       const urls = urlsInput.value.split(/\r?\n/).map(url => url.trim()).filter(Boolean);
       if (!urls.length) { setNotice("Indsæt mindst ét link."); return; }
       try {
-        await api("/api/music/queue", { method: "POST", body: JSON.stringify({ urls }) });
+        const downloadVideo = document.querySelector("#download-video").checked;
+        await api("/api/music/queue", {
+          method: "POST",
+          body: JSON.stringify({ urls, download_video: downloadVideo }),
+        });
         urlsInput.value = "";
-        setNotice(`${urls.length} link(s) føjet til køen.`);
+        setNotice(`${urls.length} link(s) føjet til køen${downloadVideo ? " med videoforsøg" : ""}.`);
         await refresh();
       } catch (error) { setNotice(error.message); }
     });
@@ -194,11 +439,56 @@
     document.querySelector("#audit").addEventListener("click", async () => {
       try {
         const report = await api("/api/music/library");
-        setNotice(`Tjekket ${report.total_files} filer · mangler cover: ${report.missing_covers} · duplikater: ${report.duplicate_groups}`);
+        const documentStatus = report.recovery_document_found
+          ? `${report.saved_track_links} gemte track-links`
+          : "arkivdokument mangler";
+        document.querySelector("#library-report").textContent =
+          `${report.total_files} filer · beskadigede: ${report.corrupt_files} · mangler cover: ${report.missing_covers} · mangler albumkunstner: ${report.missing_album_artists} · dubletgrupper: ${report.duplicate_groups} · albumspor kontrolleret: ${report.album_tracks_checked} · mangler: ${report.album_tracks_missing} · kræver albumreparation: ${report.album_tracks_needing_repair} · ${documentStatus}.`;
+        hasRecoveryDocument = report.recovery_document_found;
+        restoreButton.disabled = !hasRecoveryDocument;
+        setNotice("Bibliotekstjek færdigt.");
       } catch (error) { setNotice(error.message); }
     });
+    restoreButton.addEventListener("click", async () => {
+      if (!window.confirm(
+        "Gennemgå alle spor i _samlet_arkiv.txt og ret tags/placering på eksisterende filer? Kun manglende spor sættes i downloadkøen. Dubletter og beskadigede filer, der kan genskabes, flyttes til .restore-quarantine."
+      )) return;
+      restoreButton.disabled = true;
+      setNotice("Kontrollerer og reparerer biblioteket…");
+      try {
+        const report = await api("/api/music/library/restore", { method: "POST" });
+        const messages = [
+          `Gendannelse færdig: ${report.saved_tracks} gemte numre`,
+          `${report.existing_tracks_reprocessed} eksisterende filer kontrolleret og behandlet`,
+          `${report.missing_tracks} manglende numre`,
+          `${report.queued_tracks} manglende numre sat i kø`,
+          `${report.album_tracks_repaired} albumspor repareret`,
+          `${report.album_tracks_missing} albumspor mangler efter kontrol`,
+          `${report.album_tracks_needing_repair} albumspor kræver fortsat reparation`,
+          `${report.quarantined_duplicates} dublet(er) flyttet`,
+          `${report.quarantined_corrupt_files} beskadiget(e) fil(er) flyttet`,
+          `${report.unresolved_corrupt_files} beskadiget(e) fil(er) kunne ikke matches til arkivet`,
+        ];
+        if (report.invalid_saved_links) messages.push(`${report.invalid_saved_links} ugyldige links sprunget over`);
+        if (report.queue_limit_reached) messages.push("Køgrænsen blev nået; prøv igen, når køen er færdig");
+        messages.push(`Beholdte kopier: ${report.quarantine_directory}`);
+        document.querySelector("#library-report").textContent = messages.join(" · ");
+        setNotice("Gendannelse færdig. Følg downloads i køen.");
+        await refresh();
+      } catch (error) {
+        setNotice(error.message);
+      } finally {
+        restoreButton.disabled = !hasRecoveryDocument;
+      }
+    });
     refresh();
-    setInterval(refresh, 2500);
+    refreshDiscovery();
+    updateLinkHint();
+    document.querySelector("#audit").click();
+    setInterval(() => {
+      refresh();
+      refreshDiscovery();
+    }, 2500);
   </script>
 </body>
 </html>

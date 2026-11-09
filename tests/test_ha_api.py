@@ -1,3 +1,5 @@
+"""Test Home Assistant API requests, entity filtering, and service payloads."""
+
 import os
 import unittest
 from unittest.mock import Mock, patch

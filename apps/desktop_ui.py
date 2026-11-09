@@ -1,3 +1,5 @@
+"""Build the Tkinter desktop dashboard and its SARAH chat window."""
+
 import os
 import sys
 import threading
@@ -10,6 +12,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from ai_core.SARAH import SarahV0_2
+from ai_core.voice_io import LokalStemme
 from apps.program_manager import ProgramManager
 
 
@@ -20,8 +23,11 @@ class SarahChatWindow(tk.Toplevel):
         super().__init__(parent)
         self.sarah = sarah
         self.title("Lokalsystemet - SARAH AI Chat")
-        self.geometry("650x550")
+        self.geometry("800x620")
+        self.minsize(520, 400)
         self.configure(bg="#212121")
+        self.request_in_progress = False
+        self.speak_responses = tk.BooleanVar(self, value=True)
 
         # Chat historik visning
         self.chat_display = scrolledtext.ScrolledText(
@@ -34,6 +40,17 @@ class SarahChatWindow(tk.Toplevel):
         self.chat_display.tag_config("sarah", foreground="#81c784", font=("Consolas", 10, "bold"))
         self.chat_display.tag_config("system", foreground="#ffb74d", font=("Consolas", 9, "italic"))
 
+        tk.Checkbutton(
+            self,
+            text="Læs SARAHs svar højt med lokal dansk stemme",
+            variable=self.speak_responses,
+            bg="#212121",
+            fg="#ffffff",
+            selectcolor="#333333",
+            activebackground="#212121",
+            activeforeground="#ffffff",
+        ).pack(anchor=tk.W, padx=10, pady=(0, 8))
+
         # Input felt og knap
         input_frame = tk.Frame(self, bg="#212121")
         input_frame.pack(padx=10, pady=(0, 10), fill=tk.X)
@@ -43,9 +60,9 @@ class SarahChatWindow(tk.Toplevel):
         self.entry_msg.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 5))
         self.entry_msg.bind("<Return>", lambda event: self.send_message())
 
-        btn_send = tk.Button(input_frame, text="Send", command=self.send_message, bg="#388e3c", fg="white",
-                             relief=tk.FLAT, width=10)
-        btn_send.pack(side=tk.RIGHT)
+        self.send_button = tk.Button(input_frame, text="Send", command=self.send_message, bg="#388e3c", fg="white",
+                                     relief=tk.FLAT, width=10)
+        self.send_button.pack(side=tk.RIGHT)
 
         self.append_text("SYSTEM",
                          f"SARAH v0.2 er klar. HA status: {'Online' if self.sarah.ha_online else 'Offline'}\n",
@@ -59,31 +76,61 @@ class SarahChatWindow(tk.Toplevel):
         self.chat_display.config(state='disabled')
 
     def send_message(self):
+        if self.request_in_progress:
+            return
         msg = self.entry_msg.get().strip()
         if not msg:
             return
 
+        self.request_in_progress = True
+        speak_response = self.speak_responses.get()
         self.entry_msg.delete(0, tk.END)
         self.append_text("Dig", msg, "user")
+        self.entry_msg.config(state=tk.DISABLED)
+        self.send_button.config(state=tk.DISABLED, text="Venter…")
 
-        # Kør AI-beregning i en separat tråd så GUI'en ikke fryser
-        threading.Thread(target=self._process_ai_response, args=(msg,), daemon=True).start()
+        threading.Thread(
+            target=self._process_ai_response,
+            args=(msg, speak_response),
+            daemon=True,
+        ).start()
 
-    def _process_ai_response(self, msg):
+    def _process_ai_response(self, msg, speak_response):
         try:
             svar = self.sarah.snak(msg)
-            self.after(0, lambda: self.append_text("SARAH", svar, "sarah"))
+            if speak_response:
+                self.after(0, lambda: self.append_text("SARAH", svar, "sarah"))
+                try:
+                    LokalStemme.sig_lokalt(svar)
+                except RuntimeError as error:
+                    message = str(error)
+                    self.after(0, lambda: self.append_text("SYSTEM", message, "system"))
+                self.after(0, self._enable_input)
+            else:
+                self.after(0, lambda: self._finish_response("SARAH", svar, "sarah"))
         except Exception as e:
-            self.after(0, lambda: self.append_text("SYSTEM", f"Fejl under beregning: {e}", "system"))
+            error = str(e)
+            self.after(0, lambda: self._finish_response("SYSTEM", f"Fejl under beregning: {error}", "system"))
+
+    def _finish_response(self, sender, text, tag):
+        self.append_text(sender, text, tag)
+        self._enable_input()
+
+    def _enable_input(self):
+        self.request_in_progress = False
+        self.entry_msg.config(state=tk.NORMAL)
+        self.send_button.config(state=tk.NORMAL, text="Send")
+        self.entry_msg.focus_set()
 
 
 class DashboardApp(tk.Tk):
     def __init__(self, hardware_lager_only=False):
         super().__init__()
         self.title("Lokalsystemet - Central Kontrol")
-        self.geometry("520x480")
+        self.geometry("600x540")
+        self.minsize(440, 400)
         self.configure(bg="#2b2b2b")
-        self.resizable(False, False)
+        self.resizable(True, True)
 
         self.pm = ProgramManager()
         self.sarah = None

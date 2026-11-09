@@ -1,3 +1,6 @@
+"""Normalize, persist, search, and rank the local hardware inventory."""
+
+import heapq
 import json
 import os
 import re
@@ -11,6 +14,11 @@ DATA_FIL = BASE_DIR / "data" / "hardware" / "inventory.json"
 class HardwareLagerDB:
     """Datamodel til Lager og AI-venlig søgning."""
 
+    GOAL_STOP_WORDS = {
+        "at", "bygge", "de", "den", "der", "det", "en", "et", "for",
+        "fra", "har", "jeg", "kan", "med", "og", "på", "skal", "til",
+        "vil", "vores",
+    }
     KATEGORIER: List[str] = [
         "CPU",
         "GPU",
@@ -178,7 +186,9 @@ class HardwareLagerDB:
             tags = []
         return sorted(set(tags))
 
-    def build_search_text(self, item: Dict[str, str]) -> str:
+    @staticmethod
+    def build_search_text(item: Dict[str, str]) -> str:
+        """Build the normalized text used for inventory searches."""
         details_text = " ".join(
             f"{key} {value}" for key, value in item.get("details", {}).items()
         )
@@ -198,23 +208,52 @@ class HardwareLagerDB:
         return max([int(item.get("id", 0)) for item in items] + [0]) + 1
 
     def search(self, query: str, items: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """Find matching items, reusing text cached when each item was normalized."""
         if not query:
             return items
 
         query_lower = query.lower().strip()
-        return [item for item in items if query_lower in self.build_search_text(item)]
+        matches = []
+        for item in items:
+            search_text = item.get("search_text")
+            if not isinstance(search_text, str):
+                search_text = self.build_search_text(item)
+            if query_lower in search_text:
+                matches.append(item)
+        return matches
+
+    @classmethod
+    def _score_for_goal_words(cls, item: Dict[str, str], goal_words: set[str]) -> int:
+        """Score an item against pre-tokenized goal words."""
+        if not goal_words:
+            return 0
+
+        search_text = item.get("search_text")
+        if not isinstance(search_text, str):
+            search_text = cls.build_search_text(item)
+        item_words = set(re.findall(r"\w+", search_text.casefold()))
+        return len(goal_words & item_words)
+
+    def score_for_goal(self, item: Dict[str, str], goal: str) -> int:
+        """Score an item by the number of meaningful goal words in its search text."""
+        goal_words = set(re.findall(r"\w+", goal.casefold())) - self.GOAL_STOP_WORDS
+        return self._score_for_goal_words(item, goal_words)
 
     def recommend_for_goal(self, goal: str, items: List[Dict[str, str]], limit: int = 5) -> List[Dict[str, str]]:
+        """Return the highest-scoring usable items without sorting every match."""
         if not goal:
             return []
 
-        scored = []
-        for item in items:
-            if item.get("status") == "Defekt":
-                continue
-            score = self.score_for_goal(item, goal)
-            if score > 0:
-                scored.append((score, item))
+        goal_words = set(re.findall(r"\w+", goal.casefold())) - self.GOAL_STOP_WORDS
 
-        scored.sort(key=lambda pair: pair[0], reverse=True)
-        return [item for _, item in scored[:limit]]
+        def scored_items():
+            for item in items:
+                if item.get("status") == "Defekt":
+                    continue
+                score = self._score_for_goal_words(item, goal_words)
+                if score > 0:
+                    yield score, item
+
+        # Keep ranking work proportional to the requested result count.
+        best_matches = heapq.nlargest(max(0, limit), scored_items(), key=lambda pair: pair[0])
+        return [item for _, item in best_matches]

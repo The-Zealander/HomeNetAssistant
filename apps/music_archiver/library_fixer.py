@@ -1,13 +1,14 @@
+"""Preview or apply repairs to music tags, filenames, and album folders."""
+
 import argparse
 import os
 import re
 import shutil
 
 from mutagen import MutagenError
-from mutagen.id3 import COMM, ID3, ID3NoHeaderError, TALB, TIT2, TPE1, TPE2
+from mutagen.id3 import COMM, ID3, ID3NoHeaderError, TALB, TCMP, TIT2, TPE1, TPE2, TRCK
 
-DOWNLOAD_DIR = "/home/nobara-user/Musik"
-
+from apps.music_archiver.archiver import DOWNLOAD_DIR, _set_artist_tags, artist_names
 
 def clean_name(name):
     if not name:
@@ -42,10 +43,14 @@ def unique_target_path(target_path, source_path, reserved_paths):
         suffix += 1
 
 
-def migrate_library(download_dir=DOWNLOAD_DIR, apply_changes=False):
+def migrate_library(download_dir=DOWNLOAD_DIR, apply_changes=False, skip_paths=None):
     if not os.path.isdir(download_dir):
         raise FileNotFoundError(f"Musikmappen findes ikke: {download_dir}")
 
+    skipped_paths = {
+        os.path.normcase(os.path.abspath(path))
+        for path in (skip_paths or ())
+    }
     print("==================================================")
     print(" SARAH Library Migrator")
     print("==================================================")
@@ -55,7 +60,9 @@ def migrate_library(download_dir=DOWNLOAD_DIR, apply_changes=False):
     for root, _, files in os.walk(download_dir):
         for filename in files:
             if filename.lower().endswith(".mp3"):
-                mp3_files.append(os.path.join(root, filename))
+                file_path = os.path.join(root, filename)
+                if os.path.normcase(os.path.abspath(file_path)) not in skipped_paths:
+                    mp3_files.append(file_path)
 
     action = "Starter oprydning og tagging" if apply_changes else "Forhåndsvisning (ingen filer ændres)"
     print(f"Fandt {len(mp3_files)} MP3-filer. {action}...\n")
@@ -77,18 +84,56 @@ def migrate_library(download_dir=DOWNLOAD_DIR, apply_changes=False):
             fallback_title = os.path.splitext(os.path.basename(file_path))[0]
             title = clean_name(raw_title) or clean_name(fallback_title) or "Ukendt titel"
 
-            raw_artist = str(tags.get("TPE1", "")).strip()
-            artist = raw_artist if raw_artist and raw_artist.lower() != "none" else "Ukendt Kunstner"
-            album_artist = clean_name(artist.split(",")[0].split("&")[0]) or "Ukendt Kunstner"
+            artist_frame = tags.get("TXXX:ARTISTS") or tags.get("TPE1")
+            artist_values = artist_frame.text if artist_frame else []
+            artists = artist_names(
+                artist_values[0] if len(artist_values) == 1 else artist_values
+            )
+            if not artists:
+                artists = ["Ukendt Kunstner"]
+            artist = ", ".join(artists)
+            compilation_types = tags.get("TXXX:MusicBrainz Album Type")
+            is_compilation = (
+                str(tags.get("TCMP", "")).strip().casefold() in {"1", "true", "yes"}
+                or any(
+                    str(value).casefold() == "compilation"
+                    for value in (compilation_types.text if compilation_types else [])
+                )
+            )
+            album_artist_frame = tags.get("TXXX:ALBUM ARTISTS") or tags.get("TPE2")
+            album_artist_values = (
+                ["Various Artists"]
+                if is_compilation
+                else album_artist_frame.text if album_artist_frame else artists[:1]
+            )
+            album_artists = artist_names(
+                album_artist_values[0]
+                if len(album_artist_values) == 1
+                else album_artist_values
+            ) or artists[:1]
+            album_artist = clean_name(album_artists[0]) or "Ukendt Kunstner"
 
             raw_album = str(tags.get("TALB", "")).strip()
             album = clean_name(raw_album)
-            is_single = not album or album.lower() in {
-                "unknown album",
-                "ukendt album",
-                "singles",
-                "single",
-            } or album.lower() == title.lower()
+            track_number = str(tags.get("TRCK", "")).strip()
+            if not track_number:
+                filename_track = re.match(
+                    r"\s*(\d+)\s*[-.]",
+                    os.path.basename(file_path),
+                )
+                if filename_track:
+                    track_number = filename_track.group(1)
+            is_single = (
+                not album
+                or album.lower()
+                in {"unknown album", "ukendt album", "singles", "single"}
+                or (
+                    album.casefold() == title.casefold()
+                    and not track_number
+                )
+            )
+            if not track_number and is_single:
+                track_number = "1"
             album_name = title if is_single else album
 
             video_id = get_video_id(tags)
@@ -102,7 +147,7 @@ def migrate_library(download_dir=DOWNLOAD_DIR, apply_changes=False):
                 target_dir = download_dir
                 target_filename = f"{title}.mp3"
             else:
-                track_tag = str(tags.get("TRCK", "1")).split("/")[0]
+                track_tag = track_number or "1"
                 match = re.search(r"\d+", track_tag)
                 track_num = match.group(0).zfill(2) if match else "01"
                 target_dir = os.path.join(download_dir, album_artist, album_name)
@@ -115,12 +160,13 @@ def migrate_library(download_dir=DOWNLOAD_DIR, apply_changes=False):
 
             if apply_changes:
                 tags.add(TIT2(encoding=3, text=title))
-                tags.add(TPE1(encoding=3, text=artist))
-                tags.add(TPE2(encoding=3, text=album_artist))
+                _set_artist_tags(tags, artists, album_artists)
                 tags.add(TALB(encoding=3, text=album_name))
+                if track_number:
+                    tags.add(TRCK(encoding=3, text=track_number))
                 if video_id:
                     tags.add(COMM(encoding=3, lang="dan", desc="Kilde", text=source_url))
-                tags.save(file_path)
+                tags.save(file_path, v2_version=4)
                 updated_count += 1
 
                 if file_path != target_path:
@@ -193,14 +239,18 @@ def migrate_library(download_dir=DOWNLOAD_DIR, apply_changes=False):
 
 
 def write_info_file(path, lines):
+    content = "\n".join(lines)
     if os.path.exists(path):
+        with open(path, encoding="utf-8") as existing_file:
+            if existing_file.read() == content:
+                return
         stem, extension = os.path.splitext(path)
         suffix = 2
         while os.path.exists(f"{stem} ({suffix}){extension}"):
             suffix += 1
         path = f"{stem} ({suffix}){extension}"
     with open(path, "w", encoding="utf-8") as info_file:
-        info_file.write("\n".join(lines))
+        info_file.write(content)
 
 
 def main():

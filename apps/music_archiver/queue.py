@@ -1,11 +1,20 @@
+"""Validate, queue, and run sequential music downloads in the server process."""
+
 import threading
 import uuid
+from contextlib import contextmanager
 from urllib.parse import urlparse
 
 
 MAX_QUEUE_ITEMS = 500
 MAX_URL_LENGTH = 2048
-ALLOWED_HOSTS = ("youtube.com", "youtu.be")
+YOUTUBE_HOSTS = ("youtube.com", "youtu.be")
+SPOTIFY_HOSTS = ("spotify.com", "spotify.link")
+TIDAL_HOSTS = ("tidal.com", "tidal.link")
+
+
+class MusicQueueBusyError(RuntimeError):
+    pass
 
 
 class MusicQueue:
@@ -18,6 +27,50 @@ class MusicQueue:
         self._logs = []
         self._paused = False
         self._worker_running = False
+        self._maintenance = False
+
+    @contextmanager
+    def maintenance(self):
+        """Exclude download workers while the library is being reorganized."""
+        with self._condition:
+            if self._maintenance or self._worker_running or any(
+                job["status"] in {"queued", "processing"} for job in self._jobs
+            ):
+                raise MusicQueueBusyError(
+                    "Vent, til musikdownloadkøen er færdig, før biblioteket gendannes."
+                )
+            self._maintenance = True
+        try:
+            yield
+        finally:
+            with self._condition:
+                self._maintenance = False
+                self._start_worker_locked()
+
+    @staticmethod
+    def classify_url(url):
+        if not isinstance(url, str) or not url.strip() or len(url) > MAX_URL_LENGTH:
+            return "invalid"
+        parsed = urlparse(url.strip())
+        hostname = (parsed.hostname or "").lower().rstrip(".")
+
+        def matches_domain(domains):
+            return any(
+                hostname == domain or hostname.endswith(f".{domain}")
+                for domain in domains
+            )
+
+        if parsed.scheme != "https" or not hostname:
+            return "invalid"
+        if hostname == "music.youtube.com":
+            return "youtube_music"
+        if matches_domain(YOUTUBE_HOSTS):
+            return "youtube"
+        if matches_domain(SPOTIFY_HOSTS):
+            return "spotify"
+        if matches_domain(TIDAL_HOSTS):
+            return "tidal"
+        return "unsupported"
 
     @staticmethod
     def validate_url(url):
@@ -25,17 +78,34 @@ class MusicQueue:
             raise ValueError("Hvert link skal være en URL på højst 2048 tegn.")
 
         parsed = urlparse(url.strip())
-        hostname = (parsed.hostname or "").lower().rstrip(".")
-        allowed = any(hostname == host or hostname.endswith(f".{host}") for host in ALLOWED_HOSTS)
-        if parsed.scheme != "https" or not allowed:
+        if parsed.scheme != "https":
             raise ValueError("Brug et HTTPS-link fra YouTube eller YouTube Music.")
+        provider = MusicQueue.classify_url(url)
+        if provider == "spotify":
+            raise ValueError(
+                "Spotify-link genkendt. Denne kø henter ikke lyd fra Spotify; "
+                "brug en lovlig lydfil eller en YouTube-kilde, du har ret til at hente."
+            )
+        if provider == "tidal":
+            raise ValueError(
+                "Tidal-link genkendt. Denne kø henter ikke lyd fra Tidal; "
+                "brug en lovlig lydfil eller en YouTube-kilde, du har ret til at hente."
+            )
+        if provider not in {"youtube", "youtube_music"}:
+            raise ValueError(
+                "Ukendt linktype. Køen accepterer HTTPS-links fra YouTube og "
+                "YouTube Music; Spotify- og Tidal-links genkendes, men kan ikke "
+                "bruges som lydkilder."
+            )
         return url.strip()
 
-    def add(self, urls):
+    def add(self, urls, download_video=False):
         if not urls:
             raise ValueError("Tilføj mindst ét link.")
         if len(urls) > 100:
             raise ValueError("Du kan højst føje 100 links til ad gangen.")
+        if not isinstance(download_video, bool):
+            raise ValueError("Videoindstillingen skal være til eller fra.")
 
         cleaned_urls = [self.validate_url(url) for url in urls]
         with self._condition:
@@ -48,6 +118,8 @@ class MusicQueue:
                 job = {
                     "id": uuid.uuid4().hex,
                     "url": url,
+                    "provider": self.classify_url(url),
+                    "download_video": download_video,
                     "status": "queued",
                     "message": "Venter",
                 }
@@ -93,7 +165,7 @@ class MusicQueue:
             return self.snapshot()
 
     def _start_worker_locked(self):
-        if self._paused or self._worker_running:
+        if self._maintenance or self._paused or self._worker_running:
             return
         if not any(job["status"] == "queued" for job in self._jobs):
             return
@@ -113,14 +185,32 @@ class MusicQueue:
                 job["message"] = "Downloader"
                 job_id = job["id"]
                 url = job["url"]
+                download_video = job["download_video"]
 
             try:
-                succeeded = self._runner(
-                    url,
-                    lambda message: self._log(job_id, message),
-                )
+                failure_messages = []
+
+                def report_progress(message):
+                    self._log(job_id, message)
+                    if str(message).startswith("Fejl: "):
+                        failure_messages.append(str(message)[6:])
+
+                if download_video:
+                    succeeded = self._runner(
+                        url,
+                        report_progress,
+                        download_video=True,
+                    )
+                else:
+                    succeeded = self._runner(url, report_progress)
                 if not succeeded:
-                    raise RuntimeError("Et eller flere numre i dette link fejlede.")
+                    if failure_messages:
+                        details = "; ".join(failure_messages[:3])
+                        remaining = len(failure_messages) - 3
+                        if remaining > 0:
+                            details += f"; og {remaining} flere fejl (se aktivitet)"
+                        raise RuntimeError(details)
+                    raise RuntimeError("Downloadet fejlede uden yderligere oplysninger.")
             except Exception as error:
                 self._finish(job_id, "failed", str(error))
             else:
@@ -139,7 +229,7 @@ class MusicQueue:
             self._logs = self._logs[-300:]
 
     @staticmethod
-    def _download_url(url, progress_callback):
+    def _download_url(url, progress_callback, download_video=False):
         from apps.music_archiver.archiver import process_url
 
-        return process_url(url, progress_callback)
+        return process_url(url, progress_callback, download_video=download_video)

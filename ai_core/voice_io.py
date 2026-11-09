@@ -1,3 +1,5 @@
+"""Capture microphone audio, transcribe Danish speech, and synthesize local replies."""
+
 import os
 import shutil
 import subprocess
@@ -13,6 +15,7 @@ class LokalStemme:
 
     SAMPLE_RATE = 16000
     MAKS_OPTAGELSE_SEKUNDER = 30
+    TALEHASTIGHED = 185
 
     def __init__(self):
         try:
@@ -27,11 +30,11 @@ class LokalStemme:
         self._sounddevice = sounddevice
         if not shutil.which("espeak-ng"):
             raise RuntimeError("Dansk talesyntese mangler. Installér espeak-ng.")
-        self._afspiller = shutil.which("paplay") or shutil.which("aplay")
-        if not self._afspiller:
+        self._afspillere = self._find_afspillere()
+        if not self._afspillere:
             raise RuntimeError("Ingen lydafspiller fundet. Installér paplay eller aplay.")
 
-        modelnavn = os.environ.get("SARAH_TALEMODEL", "small")
+        modelnavn = os.environ.get("SARAH_TALEMODEL", "base")
         modelmappe = Path.home() / ".cache" / "sarah" / "whisper"
         print(
             f"Indlæser lokal Whisper-model '{modelnavn}'. "
@@ -105,29 +108,81 @@ class LokalStemme:
         segmenter, _ = self._model.transcribe(
             lyd,
             language="da",
-            beam_size=5,
+            beam_size=1,
             vad_filter=True,
         )
         return " ".join(segment.text.strip() for segment in segmenter).strip()
 
-    def sig(self, tekst: str):
+    @classmethod
+    def generer_lyd(cls, tekst: str) -> bytes:
         if not tekst.strip():
-            return
+            return b""
+        syntese = shutil.which("espeak-ng")
+        if not syntese:
+            raise RuntimeError("Dansk talesyntese mangler. Installér espeak-ng.")
 
         with tempfile.TemporaryDirectory(prefix="sarah-stemme-") as tempmappe:
             lydfil = Path(tempmappe) / "svar.wav"
-            resultat = subprocess.run(
-                ["espeak-ng", "-v", "da", "-s", "165", "-w", str(lydfil)],
-                input=tekst,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            try:
+                resultat = subprocess.run(
+                    [syntese, "-v", "da", "-s", str(cls.TALEHASTIGHED), "-w", str(lydfil)],
+                    input=tekst,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except OSError as fejl:
+                raise RuntimeError(f"Dansk talesyntese kunne ikke startes: {fejl}") from fejl
             if resultat.returncode:
                 raise RuntimeError(f"Dansk talesyntese fejlede: {resultat.stderr.strip()}")
-            subprocess.run(
-                [self._afspiller, "-q", str(lydfil)]
-                if Path(self._afspiller).name == "aplay"
-                else [self._afspiller, str(lydfil)],
-                check=True,
-            )
+            if not lydfil.is_file() or lydfil.stat().st_size == 0:
+                raise RuntimeError("Dansk talesyntese oprettede ingen lydfil.")
+            return lydfil.read_bytes()
+
+    def sig(self, tekst: str):
+        lyd = self.generer_lyd(tekst)
+        if not lyd:
+            return
+
+        self._afspil(lyd, self._afspillere)
+
+    @staticmethod
+    def sig_lokalt(tekst: str):
+        lyd = LokalStemme.generer_lyd(tekst)
+        if not lyd:
+            return
+        afspillere = LokalStemme._find_afspillere()
+        if not afspillere:
+            raise RuntimeError("Ingen lydafspiller fundet. Installér paplay eller aplay.")
+        LokalStemme._afspil(lyd, afspillere)
+
+    @staticmethod
+    def _find_afspillere() -> list[str]:
+        afspillere = []
+        for program in ("paplay", "aplay"):
+            afspiller = shutil.which(program)
+            if afspiller:
+                afspillere.append(afspiller)
+        return afspillere
+
+    @staticmethod
+    def _afspil(lyd: bytes, afspillere: list[str]):
+        with tempfile.TemporaryDirectory(prefix="sarah-stemme-") as tempmappe:
+            lydfil = Path(tempmappe) / "svar.wav"
+            lydfil.write_bytes(lyd)
+            fejl = None
+            for afspiller in afspillere:
+                kommando = (
+                    [afspiller, "-q", str(lydfil)]
+                    if Path(afspiller).name == "aplay"
+                    else [afspiller, str(lydfil)]
+                )
+                try:
+                    subprocess.run(kommando, capture_output=True, text=True, check=True)
+                    return
+                except (OSError, subprocess.CalledProcessError) as problem:
+                    fejl = problem
+            detaljer = getattr(fejl, "stderr", None)
+            if not detaljer and fejl:
+                detaljer = str(fejl)
+            raise RuntimeError(f"Kunne ikke afspille SARAHs svar: {detaljer or 'lydudgangen fejlede'}.") from fejl

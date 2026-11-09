@@ -1,3 +1,5 @@
+"""Verify server startup validation and safe loopback defaults."""
+
 import os
 import unittest
 from unittest.mock import patch

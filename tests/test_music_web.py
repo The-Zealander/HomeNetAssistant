@@ -1,8 +1,11 @@
+"""Test the music web API's queue, authentication, and download lifecycle."""
+
 import asyncio
 import os
 import tempfile
 import threading
 import unittest
+from pathlib import Path
 from threading import RLock
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -18,6 +21,8 @@ class MusicWebTests(unittest.TestCase):
         self.runner = Mock(return_value=True)
         runtime = SimpleNamespace(
             music_queue=MusicQueue(runner=self.runner),
+            music_assistant=Mock(),
+            music_discovery=Mock(),
             home_assistant=Mock(),
             sessioner={},
             lock=RLock(),
@@ -51,7 +56,11 @@ class MusicWebTests(unittest.TestCase):
         response = self.request("GET", "/music")
         self.assertEqual(response.status_code, 200)
         self.assertIn("Musikarkivar", response.text)
+        self.assertIn("Spotify- og Tidal-links genkendes", response.text)
+        self.assertIn("Genkendte kilder", response.text)
         self.assertIn("Gem og test nøgle", response.text)
+        self.assertIn("Kontrollér og reparér hele arkivet", response.text)
+        self.assertIn("gennemgår hvert spor i _samlet_arkiv.txt", response.text)
         self.assertEqual(response.headers["cache-control"], "no-store")
 
     def test_root_dashboard_is_served(self):
@@ -62,6 +71,11 @@ class MusicWebTests(unittest.TestCase):
         self.assertIn("sarah-avatar", response.text)
         self.assertIn("Start talelytning", response.text)
         self.assertIn("Afspil SARAHs svar", response.text)
+        self.assertIn('option value="local">SARAH (lokal dansk stemme)', response.text)
+        self.assertIn("/api/voice/speak", response.text)
+        self.assertIn('id="new-chat"', response.text)
+        self.assertIn('role="log"', response.text)
+        self.assertIn("restoreChatHistory", response.text)
         self.assertIn("Home Assistant", response.text)
         self.assertIn("Gem og test nøgle", response.text)
         self.assertEqual(response.headers["cache-control"], "no-store")
@@ -94,6 +108,33 @@ class MusicWebTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"session_id": "session-1", "svar": "Hej fra SARAH"})
         self.sarah.snak.assert_called_once_with("Hej")
+
+    def test_local_voice_synthesis_requires_auth_and_returns_wav_audio(self):
+        denied = self.request("POST", "/api/voice/speak", json={"message": "Hej"})
+        self.assertEqual(denied.status_code, 401)
+
+        with patch("server.app.LokalStemme.generer_lyd", return_value=b"RIFF-test-audio") as synthesize:
+            response = self.request(
+                "POST",
+                "/api/voice/speak",
+                headers={"Authorization": "Bearer test-token"},
+                json={"message": "Hej SARAH"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "audio/wav")
+        self.assertEqual(response.content, b"RIFF-test-audio")
+        synthesize.assert_called_once_with("Hej SARAH")
+
+    def test_local_voice_synthesis_rejects_empty_text(self):
+        response = self.request(
+            "POST",
+            "/api/voice/speak",
+            headers={"Authorization": "Bearer test-token"},
+            json={"message": "   "},
+        )
+
+        self.assertEqual(response.status_code, 422)
 
     def test_home_assistant_entity_api_returns_safe_entity_fields(self):
         self.runtime.home_assistant.get_entities.return_value = [{
@@ -255,6 +296,39 @@ class MusicWebTests(unittest.TestCase):
         self.assertEqual(response.json()["total_files"], 1)
         self.assertEqual(response.json()["corrupt_files"], 1)
         self.assertEqual(response.json()["duplicate_groups"], 0)
+        self.assertFalse(response.json()["recovery_document_found"])
+        self.assertEqual(response.json()["saved_track_links"], 0)
+
+    def test_restore_library_requires_auth_and_uses_saved_archive_restore(self):
+        denied = self.request("POST", "/api/music/library/restore")
+        self.assertEqual(denied.status_code, 401)
+
+        report = {"saved_tracks": 2, "queued_tracks": 1}
+        with patch.dict(os.environ, {"MUSIC_DOWNLOAD_PATH": "/tmp/music-library"}), patch(
+            "server.app.restore_library",
+            return_value=report,
+        ) as restore:
+            response = self.request(
+                "POST",
+                "/api/music/library/restore",
+                headers={"Authorization": "Bearer test-token"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), report)
+        restore.assert_called_once_with("/tmp/music-library", self.runtime.music_queue)
+
+    def test_restore_library_waits_for_an_idle_download_queue(self):
+        self.runtime.music_queue.pause()
+        self.runtime.music_queue.add(["https://youtu.be/pending"])
+
+        response = self.request(
+            "POST",
+            "/api/music/library/restore",
+            headers={"Authorization": "Bearer test-token"},
+        )
+
+        self.assertEqual(response.status_code, 409)
 
     def test_api_requires_token_and_accepts_valid_queue_items(self):
         denied = self.request("GET", "/api/music/queue")
@@ -271,6 +345,21 @@ class MusicWebTests(unittest.TestCase):
         self.assertEqual(len(response.json()["added"]), 1)
         self.assertTrue(response.json()["added"][0]["id"])
 
+    def test_queue_api_preserves_optional_video_download_setting(self):
+        self.runtime.music_queue.pause()
+        with patch.dict("os.environ", {"SARAH_API_TOKEN": ""}):
+            response = self.request(
+                "POST",
+                "/api/music/queue",
+                json={
+                    "urls": ["https://youtube.com/watch?v=video"],
+                    "download_video": True,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["added"][0]["download_video"])
+
     def test_empty_token_configuration_allows_local_development(self):
         with patch.dict("os.environ", {"SARAH_API_TOKEN": ""}):
             response = self.request("GET", "/api/music/queue")
@@ -285,6 +374,75 @@ class MusicWebTests(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 422)
         self.assertIn("YouTube", response.json()["detail"])
+
+    def test_api_explains_that_spotify_links_are_not_audio_sources(self):
+        with patch.dict("os.environ", {"SARAH_API_TOKEN": ""}):
+            response = self.request(
+                "POST",
+                "/api/music/queue",
+                json={"urls": ["https://open.spotify.com/track/track-id"]},
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("Spotify-link genkendt", response.json()["detail"])
+        self.assertEqual(self.runtime.music_queue.snapshot()["jobs"], [])
+
+    def test_music_assistant_api_forwards_local_search_and_refresh(self):
+        report = {"mode": "local_metadata_ranker", "recommendations": []}
+        self.runtime.music_assistant.analyze.return_value = report
+        with tempfile.TemporaryDirectory() as music_directory, patch.dict(
+            os.environ,
+            {
+                "MUSIC_DOWNLOAD_PATH": music_directory,
+                "SARAH_API_TOKEN": "",
+            },
+        ):
+            response = self.request(
+                "GET",
+                "/api/music/assistant?q=jazz&limit=5&refresh=true",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), report)
+        self.runtime.music_assistant.analyze.assert_called_once_with(
+            Path(music_directory),
+            query="jazz",
+            limit=5,
+            refresh=True,
+        )
+
+    def test_source_discovery_status_and_start_use_authenticated_api(self):
+        status = {"status": "paused", "processed": 2, "total": 5}
+        self.runtime.music_discovery.snapshot.return_value = status
+        response = self.request(
+            "GET",
+            "/api/music/assistant/discovery",
+            headers={"Authorization": f"Bearer {os.environ['SARAH_API_TOKEN']}"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), status)
+
+        self.runtime.music_discovery.start.return_value = {
+            "status": "running",
+            "total": 5,
+        }
+        with tempfile.TemporaryDirectory() as music_directory, patch.dict(
+            os.environ,
+            {
+                "MUSIC_DOWNLOAD_PATH": music_directory,
+                "SARAH_API_TOKEN": "",
+            },
+        ):
+            started = self.request(
+                "POST",
+                "/api/music/assistant/discovery/start",
+            )
+
+        self.assertEqual(started.status_code, 200)
+        self.runtime.music_discovery.start.assert_called_once_with(
+            Path(music_directory),
+            refresh=True,
+        )
 
     def test_queue_status_updates_after_worker_finishes(self):
         finished = threading.Event()
